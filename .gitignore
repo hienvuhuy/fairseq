@@ -117,6 +117,8 @@ ENV/
 
 # data
 data-bin/
+names/
+names-bin/
 
 # reranking
 /examples/reranking/rerank_data
@@ -134,3 +136,21 @@ experimental/*
 
 # Weights and Biases logs
 wandb/
+
+# External data
+/fairseq/examples/translation/
+
+# Check point
+*.pt
+# corpus
+*.de
+*.en
+*.vi
+
+# The Example directory
+/fairseq/fairseq/examples
+examples/translation/orig/de-en/IWSLT14.TED.dev2010.de-en.de.xml
+examples/*
+
+#zip file
+*.gz

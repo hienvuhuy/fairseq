@@ -49,7 +49,7 @@ def main(cfg: FairseqConfig) -> None:
         cfg = convert_namespace_to_omegaconf(cfg)
 
     utils.import_user_module(cfg.common)
-
+    # from pudb import set_trace; set_trace()
     if distributed_utils.is_master(cfg.distributed_training) and "job_logging_cfg" in cfg:
         # make hydra logging work with ddp (see # see https://github.com/facebookresearch/hydra/issues/1126)
         logging.config.dictConfig(OmegaConf.to_container(cfg.job_logging_cfg))
@@ -168,7 +168,7 @@ def main(cfg: FairseqConfig) -> None:
                 f"(--stop-min-lr={cfg.optimization.stop_min_lr})"
             )
             break
-
+        # from pudb import set_trace; set_trace()
         # train for one epoch
         valid_losses, should_stop = train(cfg, trainer, task, epoch_itr)
         if should_stop:
@@ -231,6 +231,7 @@ def train(
 ) -> Tuple[List[Optional[float]], bool]:
     """Train the model for one epoch and return validation losses."""
     # Initialize data iterator
+    # from pudb import set_trace; set_trace()
     itr = epoch_itr.next_epoch_itr(
         fix_batches_to_gpus=cfg.distributed_training.fix_batches_to_gpus,
         shuffle=(epoch_itr.next_epoch_idx > cfg.dataset.curriculum),
@@ -339,6 +340,7 @@ def validate_and_save(
     # Stopping conditions (and an additional one based on validation loss later
     # on)
     should_stop = False
+    # from pudb import set_trace; set_trace()
     if num_updates >= max_update:
         should_stop = True
         logger.info(
@@ -382,6 +384,7 @@ def validate_and_save(
     # Validate
     valid_losses = [None]
     if do_validate:
+        # from pudb import set_trace; set_trace()
         valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets)
 
     should_stop |= should_stop_early(cfg, valid_losses[0])

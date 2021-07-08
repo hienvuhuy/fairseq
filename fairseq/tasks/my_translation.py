@@ -3,6 +3,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+# Clone to create new task with customize evaluate results
+
+
 from dataclasses import dataclass, field
 import itertools
 import json
@@ -171,7 +174,7 @@ def load_langpair_dataset(
 
 
 @dataclass
-class TranslationConfig(FairseqDataclass):
+class MyTranslationConfig(FairseqDataclass):
     data: Optional[str] = field(
         default=None,
         metadata={
@@ -264,8 +267,8 @@ class TranslationConfig(FairseqDataclass):
     )
 
 
-@register_task("translation", dataclass=TranslationConfig)
-class TranslationTask(FairseqTask):
+@register_task("translation", dataclass=MyTranslationConfig)
+class MyTranslationTask(FairseqTask):
     """
     Translate from one (source) language to another (target) language.
 
@@ -281,13 +284,13 @@ class TranslationTask(FairseqTask):
 
     cfg: TranslationConfig
 
-    def __init__(self, cfg: TranslationConfig, src_dict, tgt_dict):
+    def __init__(self, cfg: MyTranslationConfig, src_dict, tgt_dict):
         super().__init__(cfg)
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
 
     @classmethod
-    def setup_task(cls, cfg: TranslationConfig, **kwargs):
+    def setup_task(cls, cfg: MyTranslationConfig, **kwargs):
         """Setup the task (e.g., load dictionaries).
 
         Args:

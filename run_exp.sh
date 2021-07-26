@@ -15,9 +15,11 @@
 #       3: training
 #
 
-EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5_original"
+# EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5_original"
+EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/debug"
 # DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/separated_with_bpe"
-DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/original_with_bpe"
+# DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/original_with_bpe"
+DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/debug"
 FAIRSEQ="/home/cl/huyhien-v/Workspace/MT/my_fairseq/fairseq"
 prefix='voita-en-ru-1_5m' #'multi_att_en-ru'
 
@@ -33,7 +35,7 @@ MAX_TOKEN="1000"
 
 
 
-NUMBER_OF_LINES_IN_FILE="200000"
+NUMBER_OF_LINES_IN_FILE="100000" #old value: 200000
 EXPID=$1
 DATA_BIN="$EXP_PATH/data-bin"
 CHECKPOINT="$EXP_PATH/checkpoints"
@@ -43,7 +45,7 @@ src_lang='en'
 tgt_lang='ru'
 TEMP_DIR="$EXP_PATH/temp"
 # echo $1
-if [ "$1" = "0" ] || [ "$1" = "1" ] ; then
+if [ "$1" = "1" ] || [ "$1" = "2" ] ; then
     echo "Preparing data..."
     echo "   Creating the data-bin folder..."
     if [ -d "$DATA_BIN" ];

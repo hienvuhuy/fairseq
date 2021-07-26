@@ -1,3 +1,7 @@
+
+
+
+
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,6 +26,8 @@ from fairseq.modules import (
     SinusoidalPositionalEmbedding,
     TransformerDecoderLayer,
     TransformerEncoderLayer,
+    MyTransformerDecoderLayer,
+    MyTransformerEncoderLayer,
 )
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
@@ -324,6 +330,7 @@ class MyTransformerModel(FairseqEncoderDecoderModel):
         Copied from the base class, but without ``**kwargs``,
         which are not supported by TorchScript.
         """
+        from pudb import set_trace; set_trace()
         # Khai bao encoder
         encoder_out = self.encoder(
             src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens
@@ -380,6 +387,11 @@ class MyTransformerEncoder(FairseqEncoder):
 
         self.embed_tokens = embed_tokens
 
+        # hmm, why scale? need paper to understand. Currently, we don't use it anymore
+        # Some explaination come from:
+        #   https://stackoverflow.com/questions/56930821/why-does-embedding-vector-multiplied-by-a-constant-in-transformer-model
+        #   https://towardsdatascience.com/how-to-code-the-transformer-in-pytorch-24db27c8f9ec
+        # We scale up the embed to make sure that the value of word embedding is not to small
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
 
         # Positional embedding
@@ -424,7 +436,7 @@ class MyTransformerEncoder(FairseqEncoder):
 
     def build_encoder_layer(self, args):
         # N layers of stacked encoder 
-        layer = TransformerEncoderLayer(args)
+        layer = MyTransformerEncoderLayer(args)
         checkpoint = getattr(args, "checkpoint_activations", False)
         if checkpoint:
             offload_to_cpu = getattr(args, "offload_activations", False)
@@ -438,6 +450,7 @@ class MyTransformerEncoder(FairseqEncoder):
         layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
         return layer
 
+    # forward embedding: add postion embedding value to word embedding
     def forward_embedding(
         self, src_tokens, token_embedding: Optional[torch.Tensor] = None
     ):
@@ -452,7 +465,7 @@ class MyTransformerEncoder(FairseqEncoder):
         x = self.dropout_module(x)
         if self.quant_noise is not None:
             x = self.quant_noise(x)
-        return x, embed
+        return x, embed # Return new embedding value (x) and old embedding value (embed)
 
     def forward(
         self,
@@ -526,13 +539,17 @@ class MyTransformerEncoder(FairseqEncoder):
         # compute padding mask
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
         has_pads = (src_tokens.device.type == "xla" or encoder_padding_mask.any())
-
+        from pudb import set_trace; set_trace()
+        # hien-v: src_token (batch x length) 
         x, encoder_embedding = self.forward_embedding(src_tokens, token_embeddings)
 
+        # hien-v: x -> (batch x lenth x embed_size)
         # account for padding while computing the representation
         if has_pads:
             x = x * (1 - encoder_padding_mask.unsqueeze(-1).type_as(x))
-
+        # hien-v:   B: Batch
+        #           T: Token length
+        #           C: ?? (embedding size)
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
@@ -653,7 +670,7 @@ class MyTransformerEncoder(FairseqEncoder):
 class MyTransformerDecoder(FairseqIncrementalDecoder):
     """
     Transformer decoder consisting of *args.decoder_layers* layers. Each layer
-    is a :class:`TransformerDecoderLayer`.
+    is a :class:`TransformerDecoderLayer`. change to MyTransformerDecoderLayer by hien-v
 
     Args:
         args (argparse.Namespace): parsed command-line arguments
@@ -787,7 +804,7 @@ class MyTransformerDecoder(FairseqIncrementalDecoder):
 
 
     def build_decoder_layer(self, args, no_encoder_attn=False):
-        layer = TransformerDecoderLayer(args, no_encoder_attn)
+        layer = MyTransformerDecoderLayer(args, no_encoder_attn)
         checkpoint = getattr(args, "checkpoint_activations", False)
         if checkpoint:
             offload_to_cpu = getattr(args, "offload_activations", False)
@@ -1119,3 +1136,15 @@ def base_architecture(args):
     args.quant_noise_pq = getattr(args, "quant_noise_pq", 0)
     args.quant_noise_pq_block_size = getattr(args, "quant_noise_pq_block_size", 8)
     args.quant_noise_scalar = getattr(args, "quant_noise_scalar", 0)
+
+@register_model_architecture("mytransformer", "standard_transformer")
+def transformer_iwslt_de_en(args):
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 512)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
+    args.encoder_layers = getattr(args, "encoder_layers", 6)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 1024)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
+    args.decoder_layers = getattr(args, "decoder_layers", 6)
+    base_architecture(args)

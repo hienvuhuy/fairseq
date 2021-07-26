@@ -56,3 +56,17 @@ def generate_masking(inputs, sentence_sep_id):
 	
 	return mask
 ```
+
+
+## Some notes about dataset in fairseq
+* In task (my_translation.py): 
+  * self.src_dict (fairseq.data.dictionary)
+    * method string(Tensor) -> return string of input tensor
+    * method index(sym)  -> return index of specify tensor
+    * if you want to check what character in the batch:
+      * self.src_dict[Tensor with dim torch.Size([]) or torch.Size([1]) ]
+  * self.tgt_dict (fairseq.data.dictionary)
+    * Similar to self.src_dict
+
+* Criterion:
+  * Compute loss

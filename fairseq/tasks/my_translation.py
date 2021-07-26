@@ -14,9 +14,11 @@ import os
 from typing import Optional
 from argparse import Namespace
 from omegaconf import II
+import torch
+
 
 import numpy as np
-from fairseq import metrics, utils
+from fairseq import metrics, utils, my_utils
 from fairseq.data import (
     AppendTokenDataset,
     ConcatDataset,
@@ -35,6 +37,8 @@ from fairseq.tasks import FairseqTask, register_task
 
 EVAL_BLEU_ORDER = 4
 
+# SOURCE_SEPARATION_ID = -1 # initialize value 
+# TARGET_SEPARATION_ID = -1 # initialize value
 
 logger = logging.getLogger(__name__)
 
@@ -266,8 +270,13 @@ class MyTranslationConfig(FairseqDataclass):
         default=False, metadata={"help": "print sample generations during validation"}
     )
 
+    # --eval-bleu-print-samples-with-last-sentence
+    eval_bleu_print_samples_with_last_sentence: bool = field(
+        default=False, metadata={"help": "print sample generations during validation. Only for last sentence in a full paragraph"}
+    )
 
-@register_task("translation", dataclass=MyTranslationConfig)
+
+@register_task("mytranslation", dataclass=MyTranslationConfig)
 class MyTranslationTask(FairseqTask):
     """
     Translate from one (source) language to another (target) language.
@@ -282,12 +291,19 @@ class MyTranslationTask(FairseqTask):
         :mod:`fairseq-generate` and :mod:`fairseq-interactive`.
     """
 
-    cfg: TranslationConfig
+    cfg: MyTranslationConfig
 
     def __init__(self, cfg: MyTranslationConfig, src_dict, tgt_dict):
         super().__init__(cfg)
+        from pudb import set_trace; set_trace()
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
+
+        # Get id of '_eos'
+        if len(self.src_dict) > 10:
+            my_utils.SOURCE_SEPARATION_ID = self.src_dict.index('_eos')
+        if len(self.tgt_dict) > 10:
+            my_utils.TARGET_SEPARATION_ID = self.tgt_dict.index('_eos')
 
     @classmethod
     def setup_task(cls, cfg: MyTranslationConfig, **kwargs):
@@ -296,7 +312,7 @@ class MyTranslationTask(FairseqTask):
         Args:
             args (argparse.Namespace): parsed command-line arguments
         """
-
+        # from pudb import set_trace; set_trace()
         paths = utils.split_paths(cfg.data)
         assert len(paths) > 0
         # find language pair automatically
@@ -328,6 +344,7 @@ class MyTranslationTask(FairseqTask):
         Args:
             split (str): name of the split (e.g., train, valid, test)
         """
+        from pudb import set_trace; set_trace()
         paths = utils.split_paths(self.cfg.data)
         assert len(paths) > 0
         if split != self.cfg.train_subset:
@@ -382,20 +399,70 @@ class MyTranslationTask(FairseqTask):
             )
         return model
 
+    def train_step(
+        self, sample, model, criterion, optimizer, update_num, ignore_grad=False
+    ):
+        """
+        Do forward and backward, and return the loss as computed by *criterion*
+        for the given *model* and *sample*.
+
+        Args:
+            sample (dict): the mini-batch. The format is defined by the
+                :class:`~fairseq.data.FairseqDataset`.
+            model (~fairseq.models.BaseFairseqModel): the model
+            criterion (~fairseq.criterions.FairseqCriterion): the criterion
+            optimizer (~fairseq.optim.FairseqOptimizer): the optimizer
+            update_num (int): the current update
+            ignore_grad (bool): multiply loss by 0 if this is set to True
+
+        Returns:
+            tuple:
+                - the loss
+                - the sample size, which is used as the denominator for the
+                  gradient
+                - logging outputs to display while training
+        """
+        # Check '_eos' again
+        from pudb import set_trace; set_trace()
+        assert my_utils.SOURCE_SEPARATION_ID == self.src_dict.index('_eos')
+        assert my_utils.TARGET_SEPARATION_ID == self.tgt_dict.index('_eos')
+
+        model.train()
+        model.set_num_updates(update_num)
+        with torch.autograd.profiler.record_function("forward"):
+            loss, sample_size, logging_output = criterion(model, sample)
+        if ignore_grad:
+            loss *= 0
+        with torch.autograd.profiler.record_function("backward"):
+            optimizer.backward(loss)
+        return loss, sample_size, logging_output
+
     def valid_step(self, sample, model, criterion):
         loss, sample_size, logging_output = super().valid_step(sample, model, criterion)
-        # from pudb import set_trace; set_trace()
+        from pudb import set_trace; set_trace()
         if self.cfg.eval_bleu:
             
             bleu = self._inference_with_bleu(self.sequence_generator, sample, model)
             logging_output["_bleu_sys_len"] = bleu.sys_len
             logging_output["_bleu_ref_len"] = bleu.ref_len
+
+            # calculate bleu for the last sentence only
+            if self.cfg.eval_bleu_print_samples_with_last_sentence:
+                bleu_last = self._inference_with_bleu(self.sequence_generator, sample, model, only_last_sentence=True)
+                logging_output["_bleu_last_sys_len"] = bleu_last.sys_len
+                logging_output["_bleu_last_ref_len"] = bleu_last.ref_len
+            
             # we split counts into separate entries so that they can be
             # summed efficiently across workers using fast-stat-sync
             assert len(bleu.counts) == EVAL_BLEU_ORDER
+            if self.cfg.eval_bleu_print_samples_with_last_sentence:
+                assert len(bleu_last.counts) == EVAL_BLEU_ORDER
             for i in range(EVAL_BLEU_ORDER):
                 logging_output["_bleu_counts_" + str(i)] = bleu.counts[i]
                 logging_output["_bleu_totals_" + str(i)] = bleu.totals[i]
+                if self.cfg.eval_bleu_print_samples_with_last_sentence:
+                    logging_output["_bleu_last_counts_" + str(i)] = bleu.counts[i]
+                    logging_output["_bleu_last_totals_" + str(i)] = bleu.totals[i]
         return loss, sample_size, logging_output
 
     def reduce_metrics(self, logging_outputs, criterion):
@@ -441,6 +508,48 @@ class MyTranslationTask(FairseqTask):
 
                 metrics.log_derived("bleu", compute_bleu)
 
+        if self.cfg.eval_bleu_print_samples_with_last_sentence:
+
+            def sum_logs(key):
+                import torch
+                result = sum(log.get(key, 0) for log in logging_outputs)
+                if torch.is_tensor(result):
+                    result = result.cpu()
+                return result
+
+            counts, totals = [], []
+            for i in range(EVAL_BLEU_ORDER):
+                counts.append(sum_logs("_bleu_last_counts_" + str(i)))
+                totals.append(sum_logs("_bleu_last_totals_" + str(i)))
+
+            if max(totals) > 0:
+                # log counts as numpy arrays -- log_scalar will sum them correctly
+                metrics.log_scalar("_bleu_last_counts", np.array(counts))
+                metrics.log_scalar("_bleu_last_totals", np.array(totals))
+                metrics.log_scalar("_bleu_last_sys_len", sum_logs("_bleu_last_sys_len"))
+                metrics.log_scalar("_bleu_last_ref_len", sum_logs("_bleu_last_ref_len"))
+
+                def compute_bleu(meters):
+                    import inspect
+                    import sacrebleu
+
+                    fn_sig = inspect.getfullargspec(sacrebleu.compute_bleu)[0]
+                    if "smooth_method" in fn_sig:
+                        smooth = {"smooth_method": "exp"}
+                    else:
+                        smooth = {"smooth": "exp"}
+                    bleu_last = sacrebleu.compute_bleu(
+                        correct=meters["_bleu_last_counts"].sum,
+                        total=meters["_bleu_last_totals"].sum,
+                        sys_len=meters["_bleu_last_sys_len"].sum,
+                        ref_len=meters["_bleu_last_ref_len"].sum,
+                        **smooth
+                    )
+                    return round(bleu_last.score, 2)
+
+                metrics.log_derived("bleu_last", compute_bleu)
+
+
     def max_positions(self):
         """Return the max sentence length allowed by the task."""
         return (self.cfg.max_source_positions, self.cfg.max_target_positions)
@@ -455,7 +564,7 @@ class MyTranslationTask(FairseqTask):
         """Return the target :class:`~fairseq.data.Dictionary`."""
         return self.tgt_dict
 
-    def _inference_with_bleu(self, generator, sample, model):
+    def _inference_with_bleu(self, generator, sample, model, only_last_sentence=False):
         import sacrebleu
 
         def decode(toks, escape_unk=False):
@@ -475,6 +584,7 @@ class MyTranslationTask(FairseqTask):
 
         gen_out = self.inference_step(generator, [model], sample, prefix_tokens=None)
         hyps, refs = [], []
+        # from pudb import set_trace; set_trace()
         for i in range(len(gen_out)):
             hyps.append(decode(gen_out[i][0]["tokens"]))
             refs.append(
@@ -484,21 +594,22 @@ class MyTranslationTask(FairseqTask):
                 )
             )
         if self.cfg.eval_bleu_print_samples:
-            # from pudb import set_trace; set_trace()
-            # numbers = [i.strip() for i in open('/home/cl/huyhien-v/Workspace/MT/experiments/count.txt', 'r').readlines()]
-            # number = numbers[0]
-            # directory = "/home/cl/huyhien-v/Workspace/MT/experiments/valid_translations/"
-            # write_file_src = open(directory+'valid'+str(number)+'.src', 'w')
-            # for _index in range(0, len(hyps)):
-            #     write_file_src.write(str(hyps[_index])+'|||'+str(refs[_index]+'\n'))
-            # write_file_src.close()
-            # # for _content in hyps
-            # out_file = open('/home/cl/huyhien-v/Workspace/MT/experiments/count.txt', 'w')
-            # out_file.write(str(int(number)+1))
-            # out_file.close()
             logger.info("example hypothesis: " + hyps[0])
             logger.info("example reference: " + refs[0])
+        # if self.cfg.eval_bleu_print_samples_with_last_sentence:
+        #     # from pudb import set_trace; set_trace()
+        #     logger.info("example hypothesis: " + hyps[0])
+        #     logger.info("example reference: " + refs[0])
         if self.cfg.eval_tokenized_bleu:
+            # if self.cfg.eval_bleu_print_samples_with_last_sentence:
+            if only_last_sentence == True:
+                hyps = [_hyp.strip().split('_eos')[-1].strip() for _hyp in hyps]
+                refs = [_ref.strip().split('_eos')[-1].strip() for _ref in refs]
+
             return sacrebleu.corpus_bleu(hyps, [refs], tokenize="none")
         else:
+            # if self.cfg.eval_bleu_print_samples_with_last_sentence:
+            if only_last_sentence == True:
+                hyps = [_hyp.strip().split('_eos')[-1].strip() for _hyp in hyps]
+                refs = [_ref.strip().split('_eos')[-1].strip() for _ref in refs]
             return sacrebleu.corpus_bleu(hyps, [refs])

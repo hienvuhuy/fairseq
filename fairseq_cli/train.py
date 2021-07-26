@@ -117,6 +117,9 @@ def main(cfg: FairseqConfig) -> None:
     for valid_sub_split in cfg.dataset.valid_subset.split(","):
         task.load_dataset(valid_sub_split, combine=False, epoch=1)
 
+
+    # load test. Hien-v
+    task.load_dataset('test', combine=False, epoch=1)
     # (optionally) Configure quantization
     if cfg.common.quantization_config_path is not None:
         quantizer = quantization_utils.Quantizer(
@@ -244,6 +247,11 @@ def train(
     itr = iterators.GroupedIterator(itr, update_freq)
     if cfg.common.tpu:
         itr = utils.tpu_data_loader(itr)
+    
+    # Hien-v
+    # Khai bao progress co bao gom log tham so cho wandb
+    # Todo: customize
+    # from pudb import set_trace; set_trace()
     progress = progress_bar.progress_bar(
         itr,
         log_format=cfg.common.log_format,
@@ -279,6 +287,7 @@ def train(
     num_updates = trainer.get_num_updates()
     logger.info("Start iterating over samples")
     for i, samples in enumerate(progress):
+        # from pudb import set_trace; set_trace()
         with metrics.aggregate("train_inner"), torch.autograd.profiler.record_function(
             "train_step-%d" % i
         ):
@@ -300,9 +309,13 @@ def train(
             cfg, trainer, task, epoch_itr, valid_subsets, end_of_epoch
         )
 
+        test_losses, _ = validate_without_save(
+            cfg, trainer, task, epoch_itr, ['test'], end_of_epoch
+        )
         if should_stop:
             break
 
+    # from pudb import set_trace; set_trace()
     # log end-of-epoch stats
     logger.info("end of epoch {} (average epoch stats below)".format(epoch_itr.epoch))
     stats = get_training_stats(metrics.get_smoothed_values("train"))
@@ -324,6 +337,80 @@ def _flatten_config(cfg: DictConfig):
     if namespace is not None:
         config["args"] = vars(namespace)
     return config
+
+# Hien-v modified to test (infer) during training
+# Note that, this does not matter to training progress
+def validate_without_save(
+    cfg: DictConfig,
+    trainer: Trainer,
+    task: tasks.FairseqTask,
+    epoch_itr,
+    valid_subsets: List[str], #Test set
+    end_of_epoch: bool,
+) -> Tuple[List[Optional[float]], bool]:
+    num_updates = trainer.get_num_updates()
+    max_update = cfg.optimization.max_update or math.inf
+
+    # Stopping conditions (and an additional one based on validation loss later
+    # on)
+    should_stop = False
+    # from pudb import set_trace; set_trace()
+    if num_updates >= max_update:
+        should_stop = True
+        logger.info(
+            f"Stopping training due to "
+            f"num_updates: {num_updates} >= max_update: {max_update}"
+        )
+
+    training_time_hours = trainer.cumulative_training_time() / (60 * 60)
+    if (
+        cfg.optimization.stop_time_hours > 0
+        and training_time_hours > cfg.optimization.stop_time_hours
+    ):
+        should_stop = True
+        logger.info(
+            f"Stopping training due to "
+            f"cumulative_training_time: {training_time_hours} > "
+            f"stop_time_hours: {cfg.optimization.stop_time_hours} hour(s)"
+        )
+
+    do_save = (
+        (end_of_epoch and epoch_itr.epoch % cfg.checkpoint.save_interval == 0)
+        or should_stop
+        or (
+            cfg.checkpoint.save_interval_updates > 0
+            and num_updates > 0
+            and num_updates % cfg.checkpoint.save_interval_updates == 0
+            and num_updates >= cfg.dataset.validate_after_updates
+        )
+    )
+    do_validate = (
+        (not end_of_epoch and do_save)  # validate during mid-epoch saves
+        or (end_of_epoch and epoch_itr.epoch % cfg.dataset.validate_interval == 0)
+        or should_stop
+        or (
+            cfg.dataset.validate_interval_updates > 0
+            and num_updates > 0
+            and num_updates % cfg.dataset.validate_interval_updates == 0
+        )
+    ) and not cfg.dataset.disable_validation
+
+    # Validate
+    valid_losses = [None]
+    if do_validate:
+        # from pudb import set_trace; set_trace()
+        valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets)
+
+    should_stop |= should_stop_early(cfg, valid_losses[0])
+
+    # Save checkpoint
+    # if do_save or should_stop:
+    #     checkpoint_utils.save_checkpoint(
+    #         cfg.checkpoint, trainer, epoch_itr, valid_losses[0]
+    #     )
+
+    return valid_losses, should_stop
+
 
 
 def validate_and_save(
@@ -457,6 +544,7 @@ def validate(
                     break
                 trainer.valid_step(sample)
 
+        from pudb import set_trace; set_trace()
         # log validation stats
         stats = get_valid_stats(cfg, trainer, agg.get_smoothed_values())
         progress.print(stats, tag=subset, step=trainer.get_num_updates())
@@ -468,6 +556,7 @@ def validate(
 def get_valid_stats(
     cfg: DictConfig, trainer: Trainer, stats: Dict[str, Any]
 ) -> Dict[str, Any]:
+    # from pudb import set_trace; set_trace()
     stats["num_updates"] = trainer.get_num_updates()
     if hasattr(checkpoint_utils.save_checkpoint, "best"):
         key = "best_{0}".format(cfg.checkpoint.best_checkpoint_metric)

@@ -907,9 +907,11 @@ class Trainer(object):
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             try:
+                # Hien-v: call logging output and push to wandb
                 _loss, sample_size, logging_output = self.task.valid_step(
                     sample, self.model, self.criterion
                 )
+                # from pudb import set_trace; set_trace()
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     self._log_oom(e)

@@ -36,6 +36,11 @@ from .transpose_last import TransposeLast
 from .unfold import unfold1d
 from .transformer_layer import TransformerDecoderLayer, TransformerEncoderLayer
 from .vggblock import VGGBlock
+# Import my codes. Note that the order of import does matter to system. It can 
+#   cause some errors if TransformerEncoderLayer (or TransformerDecoderLayer) is imported first
+from .my_multihead_attention import MyMultiheadAttention
+from .my_transformer_layer import MyTransformerEncoderLayer, MyTransformerDecoderLayer
+
 
 __all__ = [
     "AdaptiveInput",

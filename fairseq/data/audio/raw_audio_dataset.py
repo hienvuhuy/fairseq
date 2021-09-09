@@ -7,13 +7,20 @@
 import logging
 import os
 import sys
+import io
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .. import FairseqDataset, BaseWrapperDataset
+from .. import FairseqDataset
 from ..data_utils import compute_mask_indices, get_buckets, get_bucketed_sizes
+from fairseq.data.audio.audio_utils import (
+    parse_path,
+    read_from_stored_zip,
+    is_sf_audio_data,
+)
+from fairseq.data.text_compressor import TextCompressor, TextCompressionLevel
 
 
 logger = logging.getLogger(__name__)
@@ -208,11 +215,15 @@ class RawAudioDataset(FairseqDataset):
 
         if self.shuffle:
             order = [np.random.permutation(len(self))]
+            order.append(
+                np.minimum(
+                    np.array(self.sizes),
+                    self.max_sample_size,
+                )
+            )
+            return np.lexsort(order)[::-1]
         else:
-            order = [np.arange(len(self))]
-
-        order.append(self.sizes)
-        return np.lexsort(order)[::-1]
+            return np.arange(len(self))
 
     def set_bucket_info(self, num_buckets):
         self.num_buckets = num_buckets
@@ -246,6 +257,7 @@ class FileAudioDataset(RawAudioDataset):
         normalize=False,
         num_buckets=0,
         compute_mask_indices=False,
+        text_compression_level=TextCompressionLevel.none,
         **mask_compute_kwargs,
     ):
         super().__init__(
@@ -258,6 +270,8 @@ class FileAudioDataset(RawAudioDataset):
             compute_mask_indices=compute_mask_indices,
             **mask_compute_kwargs,
         )
+
+        self.text_compressor = TextCompressor(level=text_compression_level)
 
         skipped = 0
         self.fnames = []
@@ -274,7 +288,7 @@ class FileAudioDataset(RawAudioDataset):
                     skipped += 1
                     self.skipped_indices.add(i)
                     continue
-                self.fnames.append(items[0])
+                self.fnames.append(self.text_compressor.compress(items[0]))
                 sizes.append(sz)
         logger.info(f"loaded {len(self.fnames)}, skipped {skipped} samples")
 
@@ -294,9 +308,18 @@ class FileAudioDataset(RawAudioDataset):
 
     def __getitem__(self, index):
         import soundfile as sf
+        fn = self.fnames[index]
+        fn = fn if isinstance(self.fnames, list) else fn.as_py()
+        fn = self.text_compressor.decompress(fn)
+        path_or_fp = os.path.join(self.root_dir, fn)
+        _path, slice_ptr = parse_path(path_or_fp)
+        if len(slice_ptr) == 2:
+            byte_data = read_from_stored_zip(_path, slice_ptr[0], slice_ptr[1])
+            assert is_sf_audio_data(byte_data)
+            path_or_fp = io.BytesIO(byte_data)
 
-        fname = os.path.join(self.root_dir, str(self.fnames[index]))
-        wav, curr_sample_rate = sf.read(fname)
+        wav, curr_sample_rate = sf.read(path_or_fp, dtype="float32")
+
         feats = torch.from_numpy(wav).float()
         feats = self.postprocess(feats, curr_sample_rate)
         return {"id": index, "source": feats}

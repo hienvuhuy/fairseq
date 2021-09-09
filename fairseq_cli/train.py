@@ -14,6 +14,15 @@ import os
 import sys
 from typing import Dict, Optional, Any, List, Tuple, Callable
 
+# We need to setup root logger before importing any fairseq libraries.
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=os.environ.get("LOGLEVEL", "INFO").upper(),
+    stream=sys.stdout,
+)
+logger = logging.getLogger("fairseq_cli.train")
+
 import numpy as np
 import torch
 from fairseq import (
@@ -23,7 +32,7 @@ from fairseq import (
     tasks,
     utils,
 )
-from fairseq.data import iterators
+from fairseq.data import iterators, data_utils
 from fairseq.data.plasma_utils import PlasmaStore
 from fairseq.dataclass.configs import FairseqConfig
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
@@ -35,13 +44,6 @@ from fairseq.trainer import Trainer
 from omegaconf import DictConfig, OmegaConf
 
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    level=os.environ.get("LOGLEVEL", "INFO").upper(),
-    stream=sys.stdout,
-)
-logger = logging.getLogger("fairseq_cli.train")
 
 
 def main(cfg: FairseqConfig) -> None:
@@ -114,8 +116,12 @@ def main(cfg: FairseqConfig) -> None:
 
     # Load valid dataset (we load training data below, based on the latest checkpoint)
     # We load the valid dataset AFTER building the model
-    for valid_sub_split in cfg.dataset.valid_subset.split(","):
-        task.load_dataset(valid_sub_split, combine=False, epoch=1)
+    data_utils.raise_if_valid_subsets_unintentionally_ignored(cfg)
+    if cfg.dataset.combine_valid_subsets:
+        task.load_dataset("valid", combine=True, epoch=1)
+    else:
+        for valid_sub_split in cfg.dataset.valid_subset.split(","):
+            task.load_dataset(valid_sub_split, combine=False, epoch=1)
 
 
     # load test. Hien-v
@@ -161,6 +167,7 @@ def main(cfg: FairseqConfig) -> None:
 
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
+
     train_meter = meters.StopwatchMeter()
     train_meter.start()
     while epoch_itr.next_epoch_idx <= max_epoch:
@@ -466,7 +473,7 @@ def validate_and_save(
             and num_updates > 0
             and num_updates % cfg.dataset.validate_interval_updates == 0
         )
-    ) and not cfg.dataset.disable_validation
+    ) and not cfg.dataset.disable_validation and num_updates >= cfg.dataset.validate_after_updates
 
     # Validate
     valid_losses = [None]
@@ -547,6 +554,10 @@ def validate(
         from pudb import set_trace; set_trace()
         # log validation stats
         stats = get_valid_stats(cfg, trainer, agg.get_smoothed_values())
+
+        if hasattr(task, "post_validate"):
+            task.post_validate(trainer.get_model(), stats, agg)
+
         progress.print(stats, tag=subset, step=trainer.get_num_updates())
 
         valid_losses.append(stats[cfg.checkpoint.best_checkpoint_metric])

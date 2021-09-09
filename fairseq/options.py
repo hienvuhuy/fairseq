@@ -20,6 +20,7 @@ from fairseq.dataclass.configs import (
     GenerationConfig,
     InteractiveConfig,
     OptimizationConfig,
+    EMAConfig,
 )
 from fairseq.dataclass.utils import gen_parser_from_dataclass
 
@@ -40,6 +41,7 @@ def get_training_parser(default_task="translation"):
     add_model_args(parser)
     add_optimization_args(parser)
     add_checkpoint_args(parser)
+    add_ema_args(parser)
     return parser
 
 
@@ -286,6 +288,8 @@ def add_preprocess_args(parser):
                        help="Pad dictionary size to be multiple of N")
     group.add_argument("--workers", metavar="N", default=1, type=int,
                        help="number of parallel workers")
+    group.add_argument("--dict-only", action='store_true',
+                       help="if true, only builds a dictionary and then exits")
     # fmt: on
     return parser
 
@@ -377,3 +381,8 @@ def get_args(
         setattr(args, k, v)
 
     return args
+
+
+def add_ema_args(parser):
+    group = parser.add_argument_group("EMA configuration")
+    gen_parser_from_dataclass(group, EMAConfig())

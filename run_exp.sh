@@ -16,14 +16,19 @@
 #
 
 # EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5_original"
-EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/debug"
+# EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5"
+# EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5_bpe_all"
+EXP_PATH="/home/cl/huyhien-v/Workspace/MT/experiments/baseline6_with_join_dict"
 # DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/separated_with_bpe"
 # DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/original_with_bpe"
-DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/debug"
+# DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/bpe_on_source_and_train"
+# DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/bpe_all"
+DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline6M/bpe_on_source_and_train"
+# DATA_RAW="/home/cl/huyhien-v/Workspace/MT/data/voita_19/baseline1.5/debug"
 FAIRSEQ="/home/cl/huyhien-v/Workspace/MT/my_fairseq/fairseq"
-prefix='voita-en-ru-1_5m' #'multi_att_en-ru'
+prefix='baseline_transformer_en-ru_6M' #'multi_att_en-ru'
 
-WANDB_PROJECT='voita-en-ru-1_5m'
+WANDB_PROJECT='baseline_transformer_6M'
 SEED='11234'
 thresholdtgt="0"
 thresholdsrc="0"
@@ -35,9 +40,10 @@ MAX_TOKEN="1000"
 
 
 
-NUMBER_OF_LINES_IN_FILE="100000" #old value: 200000
+NUMBER_OF_LINES_IN_FILE="1000000" #old value: 200000
 EXPID=$1
 DATA_BIN="$EXP_PATH/data-bin"
+DATA_BIN_RAW="$EXP_PATH/data-raw"
 CHECKPOINT="$EXP_PATH/checkpoints"
 WANDB="$EXP_PATH/wandb"
 SPLITTED_FOLDER='train_splitted'
@@ -55,6 +61,15 @@ if [ "$1" = "1" ] || [ "$1" = "2" ] ; then
         echo "      create the data-bin folder... done"
         mkdir $DATA_BIN
     fi
+
+    if [ -d "$DATA_BIN_RAW" ];
+    then
+        echo "$DATA_BIN_RAW exists"
+    else
+        echo "      create the data-bin folder... done"
+        mkdir $DATA_BIN_RAW
+    fi
+
     echo "   Creating the checkpoints folder..."
     if [ -d "$CHECKPOINT" ];
     then
@@ -63,6 +78,7 @@ if [ "$1" = "1" ] || [ "$1" = "2" ] ; then
         echo "      create the checkpoints folder... done"
         mkdir $CHECKPOINT
     fi
+    
     echo "   Creating the wandb folder..."
     if [ -d "$WANDB" ];
     then
@@ -71,6 +87,7 @@ if [ "$1" = "1" ] || [ "$1" = "2" ] ; then
         echo "      create the wandb folder... done"
         mkdir $WANDB
     fi
+    
     echo "   Creating the temp folder..."
     if [ -d "$TEMP_DIR" ];
     then
@@ -79,6 +96,7 @@ if [ "$1" = "1" ] || [ "$1" = "2" ] ; then
         echo "      create the temp folder... done"
         mkdir $TEMP_DIR
     fi
+    
     echo "   Creating small parts of the big source files"
     # argument of python file:
     #   path_to_source_of_data    source_language    target_language    experiment_path    number_of_line_in_one_file

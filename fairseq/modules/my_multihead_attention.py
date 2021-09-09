@@ -196,7 +196,7 @@ class MyMultiheadAttention(nn.Module):
         """
         if need_head_weights:
             need_weights = True
-        from pudb import set_trace; set_trace()
+        # from pudb import set_trace; set_trace()
         is_tpu = query.device.type == "xla"
 
         tgt_len, bsz, embed_dim = query.size()
@@ -575,6 +575,7 @@ class MyLocalMultiheadAttention(nn.Module):
         encoder_decoder_attention=False,
         q_noise=0.0,
         qn_block_size=8,
+        pretrain_encoder=False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -629,6 +630,14 @@ class MyLocalMultiheadAttention(nn.Module):
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
 
+    # def frozen
+    def freeze_params(self):
+        for param in self.parameters():
+            param.requires_grad = False
+        # pass
+    def unfreeze_params(self):
+        for param in self.parameters():
+            param.requires_grad = True
     def reset_parameters(self):
         if self.qkv_same_dim:
             # Empirically observed the convergence to be much better with

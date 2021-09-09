@@ -23,6 +23,12 @@ class MyTransformerEncoderLayer(nn.Module):
         self.quant_noise = getattr(args, 'quant_noise_pq', 0)
         self.quant_noise_block_size = getattr(args, 'quant_noise_pq_block_size', 8) or 8
         self.self_attn = self.build_self_attention(self.embed_dim, args)
+        # hien-v
+        # The number of multiple type of self-attentions should be here 
+        self.self_attn_features = nn.ModuleList()
+        # need function to load from checkpoint, freeze parameters here
+        
+
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout_module = FairseqDropout(
             args.dropout, module_name=self.__class__.__name__
@@ -288,7 +294,7 @@ class MyTransformerDecoderLayer(nn.Module):
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
-        from pudb import set_trace; set_trace()
+        # from pudb import set_trace; set_trace()
         if need_head_weights:
             need_attn = True
 

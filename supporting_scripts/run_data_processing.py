@@ -56,8 +56,13 @@ for _index, _folder in enumerate(sub_directory):
     command += "--srcdict {}{} ".format(TEMP_PATH, src_dict)
     command += "--tgtdict {}{} ".format(TEMP_PATH, tgt_dict)
     command += "--destdir {} ".format(DESTINATION_PATH+'data-bin/'+prefix+str(_index).zfill(2))
+    command+=" --joined-dictionary"
     print (command)
     os.system(command)
+    othercommand =command.replace('data-bin', 'data-raw')
+    othercommand+=" --dataset-impl raw"
+    othercommand+=" --joined-dictionary"
+    os.system(othercommand)
     print ("done command")
     # sys.exit()
 print("Done!!!") 

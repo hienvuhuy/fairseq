@@ -26,6 +26,7 @@ from .learned_positional_embedding import LearnedPositionalEmbedding
 from .lightweight_convolution import LightweightConv, LightweightConv1dTBC
 from .linearized_convolution import LinearizedConvolution
 from .multihead_attention import MultiheadAttention
+from .doc_multihead_attention import DocMultiheadAttention, DocMultiFeaturesMultiheadAttention
 from .positional_embedding import PositionalEmbedding
 from .same_pad import SamePad
 from .scalar_bias import ScalarBias
@@ -35,6 +36,7 @@ from .transformer_sentence_encoder import TransformerSentenceEncoder
 from .transpose_last import TransposeLast
 from .unfold import unfold1d
 from .transformer_layer import TransformerDecoderLayer, TransformerEncoderLayer
+from .doc_transformer_layer import DocTransformerEncoderLayer, DocTransformerDecoderLayer
 from .vggblock import VGGBlock
 # Import my codes. Note that the order of import does matter to system. It can 
 #   cause some errors if TransformerEncoderLayer (or TransformerDecoderLayer) is imported first
@@ -69,6 +71,8 @@ __all__ = [
     "LightweightConv",
     "LinearizedConvolution",
     "MultiheadAttention",
+    "DocMultiheadAttention",
+    "DocMultiFeaturesMultiheadAttention"
     "PositionalEmbedding",
     "SamePad",
     "ScalarBias",
@@ -77,6 +81,8 @@ __all__ = [
     "TransformerSentenceEncoder",
     "TransformerDecoderLayer",
     "TransformerEncoderLayer",
+    "DocTransformerEncoderLayer",
+    "DocTransformerDecoderLayer",
     "TransposeLast",
     "VGGBlock",
     "unfold1d",

@@ -14,7 +14,7 @@ from omegaconf import II
 
 import torch
 import numpy as np
-from fairseq import metrics, utils,my_utils
+from fairseq import metrics, utils,doc_utils
 from fairseq.data import (
     AppendTokenDataset,
     ConcatDataset,
@@ -318,9 +318,9 @@ class DocumentTranslationTask(FairseqTask):
         
         # Get id of '_eos'
         if len(self.src_dict) > 10:
-            my_utils.SOURCE_SEPARATION_ID = self.src_dict.index('_eos')
+            doc_utils.SOURCE_SEPARATION_ID = self.src_dict.index('_eos')
         if len(self.tgt_dict) > 10:
-            my_utils.TARGET_SEPARATION_ID = self.tgt_dict.index('_eos')
+            doc_utils.TARGET_SEPARATION_ID = self.tgt_dict.index('_eos')
         # save output of translation
         self._ref_sents = []
         self._ref_last_sents = []
@@ -442,7 +442,6 @@ class DocumentTranslationTask(FairseqTask):
 
             gen_args = json.loads(self.cfg.eval_bleu_args)
             
-            # if 
             self.sequence_generator = self.build_generator(
                 [model], Namespace(**gen_args)
             )
@@ -495,8 +494,8 @@ class DocumentTranslationTask(FairseqTask):
                 - logging outputs to display while training
         """
         # Check '_eos' again
-        assert my_utils.SOURCE_SEPARATION_ID == self.src_dict.index('_eos')
-        assert my_utils.TARGET_SEPARATION_ID == self.tgt_dict.index('_eos')
+        assert doc_utils.SOURCE_SEPARATION_ID == self.src_dict.index('_eos')
+        assert doc_utils.TARGET_SEPARATION_ID == self.tgt_dict.index('_eos')
 
         model.train()
         model.set_num_updates(update_num)
@@ -593,6 +592,7 @@ class DocumentTranslationTask(FairseqTask):
         #   to control multiple bleu or sacrebleu
         # 
         def decode(toks, escape_unk=False):
+            # from pudb import set_trace; set_trace()
             s = self.tgt_dict.string(
                 toks.int().cpu(),
                 self.cfg.eval_bleu_remove_bpe,

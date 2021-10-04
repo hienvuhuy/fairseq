@@ -14,7 +14,7 @@ from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.modules.quant_noise import quant_noise
 from torch import Tensor, nn
 from torch.nn import Parameter
-
+import json
 
 # def generate_masking(inputs, sentence_sep_id):
 #   """GENERATE LONG SHORT TERM MASKING
@@ -78,6 +78,31 @@ def generate_masking(inputs, sentence_sep_id):
     mask = -1e9 * (1.0 - mask)
     return mask
 
+def _access_checkpoint(path_inside_checkpoint):
+    # path_inside_checkpoint: path to component of model
+    #   use '/' to access key of dict
+    #   for example: 'Bigmodel/model/encoder.layers.0.self_attn.k_proj.weight'
+    #      to accesss:  => dict['Bigmodel']['model]['encoder.layers.0.self_attn.k_proj.weight']
+    attributes = path_inside_checkpoint.strip().split('/')
+    return [attributes[0:-1], attributes[-1]]
+
+def _access_weight(path:list, checkpoint_dict: dict):
+    attributes = iter(path)
+    
+    for i in attributes:
+        checkpoint_dict = checkpoint_dict[i]
+    return checkpoint_dict
+
+
+def dict_parameters_of_component(path_inside_checkpoint, dict_of_parameter):
+    # Return dictionary of weigth and name of component
+    # Ex. model/encoder.layers.0.self_attn
+    # => return:  state_dict['model'], 'encoder.layers.0.self_attn'
+    attributes_of_dicts, name_of_component = _access_checkpoint(path_inside_checkpoint)
+    correct_weigth_dict = _access_weight(attributes_of_dicts, dict_of_parameter)
+    return correct_weigth_dict, name_of_component
+    # return correct_weigth_dict[name_of_component]
+
 @with_incremental_state
 class DocMultiFeaturesMultiheadAttention(nn.Module):
     """ Multi features of multihead attention
@@ -86,6 +111,8 @@ class DocMultiFeaturesMultiheadAttention(nn.Module):
         self,
         embed_dim,
         num_heads,
+        cfg,
+        weight_dict_pair,
         kdim=None,
         vdim=None,
         dropout=0.0,
@@ -96,20 +123,52 @@ class DocMultiFeaturesMultiheadAttention(nn.Module):
         encoder_decoder_attention=False,
         q_noise=0.0,
         qn_block_size=8,
+        layer_index=-1,
+        module_name='encoder' #'encoder' or 'decoder' 
     ):
-    # def __init__(self, cfg):
+        super().__init__()
         # Can check xem khoi tao the nao
-        self.layer_index = -1 #-1 means unset
-        self.linear_layer = nn.Linear()
-        self.build_model()
-        self.global_attentions = nn.ModuleList([])
+        self.layer_index = layer_index #-1 means unset
+        self.embed_dim = embed_dim
         self.local_attentions = nn.ModuleList([])
-        DocMultiheadAttention()
-        pass
-    # def build_model(self, cfg, idx):
-    #     # Note that
-    #     # Only load_state_dict work, other methods do not work
-    #     pass
+        for _index, _cfg_attn in enumerate(cfg.local_attention):
+            __local_attn = DocMultiheadAttention(
+                embed_dim,
+                num_heads,
+                dropout=dropout,
+                self_attention=self_attention,
+                q_noise=q_noise,
+                qn_block_size=qn_block_size,
+                layer_index=layer_index,
+                add_bias_kv=add_bias_kv,
+                add_zero_attn=add_zero_attn,
+                # weigth_dict_pair=weight_dict_pair
+                module_name=module_name
+            )
+            __local_attn.set_parameter(_cfg_attn, weight_dict_pair['local_attention'][_index])
+            self.local_attentions.append(__local_attn)
+
+        self.global_attentions = nn.ModuleList([])
+        for _index, _cfg_attn in enumerate(cfg.global_attention):
+            __local_attn = DocMultiheadAttention(
+                embed_dim,
+                num_heads,
+                dropout=dropout,
+                self_attention=self_attention,
+                q_noise=q_noise,
+                qn_block_size=qn_block_size,
+                layer_index=layer_index,
+                add_bias_kv=add_bias_kv,
+                add_zero_attn=add_zero_attn,
+                module_name=module_name
+            )
+            __local_attn.set_parameter(_cfg_attn, weight_dict_pair['global_attention'][_index])
+            self.global_attentions.append(__local_attn)
+
+        self.linear_layer = quant_noise(
+            nn.Linear(embed_dim*(len(self.local_attentions)+len(self.global_attentions)), embed_dim), q_noise, qn_block_size
+        )
+
     def forward(
         self, 
         query,
@@ -122,26 +181,72 @@ class DocMultiFeaturesMultiheadAttention(nn.Module):
         attn_mask: Optional[Tensor] = None,
         before_softmax: bool = False,
         need_head_weights: bool = False):
+
         # Can check xem output the nao
         # Kiem tra them ca phan decoder
-        local_outputs=[]
-        global_outputs=[]
+        # Currently, we require the shape of each attention is similar to the original attention
+        output = None
+        output_weight = None
+        # local_outputs=[]
+        # global_outputs=[]
         for _index in range(len(self.local_attentions)):
-            local_outputs.append(self.local_attentions[_index](query,
-            key,
-            value,
-            key_padding_mask=key_padding_mask,
-            need_weights=False,
-            attn_mask=attn_mask,))
+            if output is None:
+                output, output_weight = self.local_attentions[_index](query,
+                        key,
+                        value,
+                        key_padding_mask=key_padding_mask,
+                        need_weights=False,
+                        attn_mask=attn_mask,)
+            else:
+                _output, _output_weight = self.local_attentions[_index](query,
+                                            key,
+                                            value,
+                                            key_padding_mask=key_padding_mask,
+                                            need_weights=False,
+                                            attn_mask=attn_mask,)
+                output = torch.cat((output, _output), dim=-1)
+                if _output_weight is not None and output_weight is not None:
+                    output_weight = torch.cat((output_weight, _output_weight), dim=-1)
+                # output = torch.cat( (output,self.local_attentions[_index](query,
+                #                             key,
+                #                             value,
+                #                             key_padding_mask=key_padding_mask,
+                #                             need_weights=False,
+                #                             attn_mask=attn_mask,)[0]), dim=-1)
         
-        for _index in range(len(self.local_attentions)):
-            local_outputs.append(self.local_attentions[_index](query,
-            key,
-            value,
-            key_padding_mask=key_padding_mask,
-            need_weights=False,
-            attn_mask=attn_mask,))
-        pass
+        for _index in range(len(self.global_attentions)):
+            if output is None:
+                # output, _ = self.global_attentions[_index](query,
+                #         key,
+                #         value,
+                #         key_padding_mask=key_padding_mask,
+                #         need_weights=False,
+                #         attn_mask=attn_mask,)
+                output, output_weight = self.local_attentions[_index](query,
+                        key,
+                        value,
+                        key_padding_mask=key_padding_mask,
+                        need_weights=False,
+                        attn_mask=attn_mask,)
+            else:
+                # from pudb import set_trace; set_trace()
+                # output = torch.cat( (output,self.global_attentions[_index](query,
+                #                             key,
+                #                             value,
+                #                             key_padding_mask=key_padding_mask,
+                #                             need_weights=False,
+                #                             attn_mask=attn_mask,)[0]),dim=-1)
+                _output, _output_weight = self.local_attentions[_index](query,
+                                            key,
+                                            value,
+                                            key_padding_mask=key_padding_mask,
+                                            need_weights=False,
+                                            attn_mask=attn_mask,)
+                output = torch.cat((output, _output), dim=-1)
+                # from pudb import set_trace; set_trace()
+                if _output_weight is not None and output_weight is not None:
+                    output_weight = torch.cat((output_weight, _output_weight), dim=-1)
+        return self.linear_layer(output), output_weight
 
 
 @with_incremental_state
@@ -165,6 +270,9 @@ class DocMultiheadAttention(nn.Module):
         encoder_decoder_attention=False,
         q_noise=0.0,
         qn_block_size=8,
+        layer_index=-1,
+        module_name='encoder'
+        # ,weight_dict_pair=()
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -172,7 +280,9 @@ class DocMultiheadAttention(nn.Module):
         self.vdim = vdim if vdim is not None else embed_dim
         self.qkv_same_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
+        self.layer_index = layer_index #-1 means no initialization
         self.num_heads = num_heads
+        self.module_name = module_name
         self.dropout_module = FairseqDropout(
             dropout, module_name=self.__class__.__name__
         )
@@ -224,6 +334,71 @@ class DocMultiheadAttention(nn.Module):
         for param in self.parameters():
             param.requires_grad = False
         # pass
+    def set_parameter(self, cfg, weight_dict, frozen=True):
+        # Contains some steps:
+        #   1. read checkpoint
+        #   2. delete to release memory
+        #   3. pass value to variables
+        _cfg = json.loads(cfg)
+        #load model: _cfg['checkpoint_path]
+        # parameter path (inside model)
+        # checkpoint_path = _cfg['checkpoint_path']
+        _state_dict = weight_dict
+
+        attention_path = _cfg['attention_path']
+        if attention_path.find('#COMPONENT_INFO') >0:
+            attention_path = attention_path.replace('#COMPONENT_INFO', self.module_name)
+        if attention_path.find('#LAYER_INFO') >0:
+            attention_path = attention_path.replace('#LAYER_INFO',str(self.layer_index))\
+                                + _cfg['module_name'] +'.'
+        
+        # from pudb import set_trace; set_trace()
+        attention_dict, attention_component_name = dict_parameters_of_component(attention_path, _state_dict)
+        
+        # K_proj
+        _k_proj_component_name = attention_component_name + _cfg['k_variable_name']
+        _k_proj_state= self.k_proj.state_dict()
+        _partial_k_proj = { 'bias':attention_dict[_k_proj_component_name+'.bias'],
+                            'weight':attention_dict[_k_proj_component_name+'.weight']    }
+        _k_proj_state.update(_partial_k_proj)
+        self.k_proj.load_state_dict(_k_proj_state)
+
+        # Q_proj
+        _q_proj_component_name = attention_component_name + _cfg['q_variable_name']
+        _q_proj_state= self.q_proj.state_dict()
+        _partial_q_proj = { 'bias':attention_dict[_q_proj_component_name+'.bias'],
+                            'weight':attention_dict[_q_proj_component_name+'.weight']    }
+        _q_proj_state.update(_partial_q_proj)
+        self.q_proj.load_state_dict(_q_proj_state)
+
+
+        # V_proj
+        _v_proj_component_name = attention_component_name + _cfg['v_variable_name']
+        _v_proj_state= self.v_proj.state_dict()
+        _partial_v_proj = { 'bias':attention_dict[_v_proj_component_name+'.bias'],
+                            'weight':attention_dict[_v_proj_component_name+'.weight']    }
+        _v_proj_state.update(_partial_v_proj)
+        self.v_proj.load_state_dict(_v_proj_state)
+
+        # Out_proj
+
+        _out_proj_component_name = attention_component_name + _cfg['v_variable_name']
+        _out_proj_state= self.out_proj.state_dict()
+        _partial_out_proj = { 'bias':attention_dict[_out_proj_component_name+'.bias'],
+                            'weight':attention_dict[_out_proj_component_name+'.weight']    }
+        _out_proj_state.update(_partial_out_proj)
+        self.out_proj.load_state_dict(_out_proj_state)
+        if frozen:
+            self.k_proj.requires_grad = False
+            self.q_proj.requires_grad = False
+            self.v_proj.requires_grad = False
+            self.out_proj.requires_grad = False
+            # self.bias_v.requires_grad = False
+            # self.bias_k.requires_grad = False
+            # self.ou
+        pass
+    def _set_paramter(self,):
+        pass
     def unfreeze_params(self):
         for param in self.parameters():
             param.requires_grad = True
@@ -280,7 +455,7 @@ class DocMultiheadAttention(nn.Module):
         """
         if need_head_weights:
             need_weights = True
-
+        
         is_tpu = query.device.type == "xla"
 
         tgt_len, bsz, embed_dim = query.size()
@@ -518,7 +693,7 @@ class DocMultiheadAttention(nn.Module):
             if not need_head_weights:
                 # average attention weights over heads
                 attn_weights = attn_weights.mean(dim=0)
-
+        
         return attn, attn_weights
 
     @staticmethod

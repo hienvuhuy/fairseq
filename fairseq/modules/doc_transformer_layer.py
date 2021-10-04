@@ -35,12 +35,13 @@ class DocTransformerEncoderLayerBase(nn.Module):
         args (argparse.Namespace): parsed command-line arguments
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, weight_dict_pair,layer_index=-1):
         super().__init__()
         self.cfg = cfg
         self.embed_dim = cfg.encoder.embed_dim
 
-        
+        # Hien-v
+        self.layer_index = layer_index #-1: Unset. We need the layer_index to easily pickup parameter
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
         # Add new attention here
@@ -49,8 +50,12 @@ class DocTransformerEncoderLayerBase(nn.Module):
         # from pudb import set_trace; set_trace()
         # Note that self.feat_self_attn is nn.ModuleList 
         #   with length is number of attention features
-        self.feat_self_attn = self.build_feat_self_attention(self.embed_dim, cfg)
-        self.self_attn = self.build_self_attention(self.embed_dim, cfg)
+        
+        # We turn off self_attn when using feat_self_attn
+        # self.self_attn = self.build_self_attention(self.embed_dim, cfg)
+
+        self.feat_self_attn = self.build_feat_self_attention(self.embed_dim, cfg, weight_dict_pair=weight_dict_pair, layer_index = self.layer_index)
+
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
@@ -91,7 +96,7 @@ class DocTransformerEncoderLayerBase(nn.Module):
 
     #TODO: complete this today
     # Initialize the feature
-    def build_feat_self_attention(self, embed_dim, cfg):
+    def build_feat_self_attention(self, embed_dim, cfg, weight_dict_pair, layer_index):
         # from pudb import set_trace; set_trace()
         # return DocMultiFeaturesMultiheadAttention
         # list_global_attention_checkpoints = cfg.global_attention
@@ -99,11 +104,15 @@ class DocTransformerEncoderLayerBase(nn.Module):
         # list_local_attention_checkpoints = cfg.local_attention
         return DocMultiFeaturesMultiheadAttention(
             embed_dim,
-            cfg.encoder.attention_heads,
+            num_heads=cfg.encoder.attention_heads,
+            cfg=cfg,
             dropout=cfg.attention_dropout,
             self_attention=True,
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
+            weight_dict_pair=weight_dict_pair,
+            layer_index=layer_index,
+            module_name='encoder'
         )
 
     def build_self_attention(self, embed_dim, cfg):
@@ -166,22 +175,24 @@ class DocTransformerEncoderLayerBase(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
-
-        # for feature attention
-        # x, _ = self.feat_self_attn(query=x,
-        #     key=x,
-        #     value=x,
-        #     key_padding_mask=encoder_padding_mask,
-        #     need_weights=False,
-        #     attn_mask=attn_mask,)
-        x, _ = self.self_attn(
+        # from pudb import set_trace; set_trace()
+        # For feature attention
+        x, _ = self.feat_self_attn(
             query=x,
             key=x,
             value=x,
             key_padding_mask=encoder_padding_mask,
             need_weights=False,
-            attn_mask=attn_mask,
-        )
+            attn_mask=attn_mask,)
+        #x: batch x 96 x 512
+        # x, _ = self.self_attn(
+        #     query=x,
+        #     key=x,
+        #     value=x,
+        #     key_padding_mask=encoder_padding_mask,
+        #     need_weights=False,
+        #     attn_mask=attn_mask,
+        # )
         x = self.dropout_module(x)
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -230,13 +241,16 @@ class DocTransformerDecoderLayerBase(nn.Module):
     """
 
     def __init__(
-        self, cfg, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False
+        self, cfg, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False, weight_dict_pair=None, layer_index=-1
     ):
         super().__init__()
         self.embed_dim = cfg.decoder.embed_dim
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
         )
+        
+        self.layer_index = layer_index #-1: Unset. We need the layer_index to easily pickup parameter
+
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
 
@@ -251,6 +265,17 @@ class DocTransformerDecoderLayerBase(nn.Module):
             add_zero_attn=add_zero_attn,
         )
 
+        self.layer_index = layer_index #-1 means no initialization
+        self.feat_self_attn = self.build_feat_self_attention(
+            self.embed_dim, 
+            cfg, 
+            weight_dict_pair=weight_dict_pair, 
+            layer_index = self.layer_index,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn,
+        )
+
+        
         self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
         activation_dropout_p = cfg.activation_dropout
         if activation_dropout_p == 0:
@@ -307,6 +332,25 @@ class DocTransformerDecoderLayerBase(nn.Module):
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
         )
+
+    def build_feat_self_attention(
+        self, embed_dim, cfg, weight_dict_pair, layer_index, add_bias_kv=False, add_zero_attn=False
+    ):
+        return DocMultiFeaturesMultiheadAttention(
+            embed_dim,
+            num_heads=cfg.encoder.attention_heads,
+            cfg=cfg,
+            dropout=cfg.attention_dropout,
+            self_attention=not cfg.cross_self_attention,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn,
+            q_noise=self.quant_noise,
+            qn_block_size=self.quant_noise_block_size,
+            weight_dict_pair=weight_dict_pair,
+            layer_index=layer_index,
+            module_name='decoder'
+        )
+
 
     def build_encoder_attention(self, embed_dim, cfg):
         return DocMultiheadAttention(

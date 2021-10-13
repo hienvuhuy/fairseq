@@ -3,6 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+#hien-v: tam thoi hard code mot so parameter de validate
+
 from dataclasses import dataclass, field
 import itertools
 import json
@@ -89,7 +91,7 @@ def load_langpair_dataset(
 
     for k in itertools.count():
         split_k = split + (str(k) if k > 0 else "")
-
+        # from pudb import set_trace; set_trace()
         # infer langcode
         if split_exists(split_k, src, tgt, src, data_path):
             prefix = os.path.join(data_path, "{}.{}-{}.".format(split_k, src, tgt))
@@ -326,7 +328,7 @@ class DocumentTranslationTask(FairseqTask):
         self._ref_last_sents = []
         self._hypo_sents = []
         self._hypo_last_sents = []
-
+        from pudb import set_trace; set_trace()
         self._use_customized_generator = False
 
 

@@ -4,7 +4,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 """
-Train a new model on one or across multiple GPUs.
+Train a new model on one or across multiple GPUs. 
+Merge with hien-v and original versions
 """
 
 import argparse
@@ -42,7 +43,7 @@ from fairseq.logging import meters, metrics, progress_bar
 from fairseq.model_parallel.megatron_trainer import MegatronTrainer
 from fairseq.trainer import Trainer
 from omegaconf import DictConfig, OmegaConf
-
+from fairseq.tasks.document_translation import DocumentTranslationTask
 
 
 
@@ -51,7 +52,7 @@ def main(cfg: FairseqConfig) -> None:
         cfg = convert_namespace_to_omegaconf(cfg)
 
     utils.import_user_module(cfg.common)
-    # from pudb import set_trace; set_trace()
+
     if distributed_utils.is_master(cfg.distributed_training) and "job_logging_cfg" in cfg:
         # make hydra logging work with ddp (see # see https://github.com/facebookresearch/hydra/issues/1126)
         logging.config.dictConfig(OmegaConf.to_container(cfg.job_logging_cfg))
@@ -122,10 +123,13 @@ def main(cfg: FairseqConfig) -> None:
     else:
         for valid_sub_split in cfg.dataset.valid_subset.split(","):
             task.load_dataset(valid_sub_split, combine=False, epoch=1)
+    
+    # load test dataset to validate in training (hien-v)
+    if isinstance(task, DocumentTranslationTask):
+        if 'eval_test_set' in cfg['task']:
+            if cfg['task']['eval_test_set']:
+                task.load_dataset('test', combine=False, epoch=1)
 
-
-    # load test. Hien-v
-    task.load_dataset('test', combine=False, epoch=1)
     # (optionally) Configure quantization
     if cfg.common.quantization_config_path is not None:
         quantizer = quantization_utils.Quantizer(
@@ -178,7 +182,7 @@ def main(cfg: FairseqConfig) -> None:
                 f"(--stop-min-lr={cfg.optimization.stop_min_lr})"
             )
             break
-        # from pudb import set_trace; set_trace()
+
         # train for one epoch
         valid_losses, should_stop = train(cfg, trainer, task, epoch_itr)
         if should_stop:
@@ -241,7 +245,6 @@ def train(
 ) -> Tuple[List[Optional[float]], bool]:
     """Train the model for one epoch and return validation losses."""
     # Initialize data iterator
-    # from pudb import set_trace; set_trace()
     itr = epoch_itr.next_epoch_itr(
         fix_batches_to_gpus=cfg.distributed_training.fix_batches_to_gpus,
         shuffle=(epoch_itr.next_epoch_idx > cfg.dataset.curriculum),
@@ -254,11 +257,6 @@ def train(
     itr = iterators.GroupedIterator(itr, update_freq)
     if cfg.common.tpu:
         itr = utils.tpu_data_loader(itr)
-    
-    # Hien-v
-    # Khai bao progress co bao gom log tham so cho wandb
-    # Todo: customize
-    # from pudb import set_trace; set_trace()
     progress = progress_bar.progress_bar(
         itr,
         log_format=cfg.common.log_format,
@@ -294,7 +292,6 @@ def train(
     num_updates = trainer.get_num_updates()
     logger.info("Start iterating over samples")
     for i, samples in enumerate(progress):
-        # from pudb import set_trace; set_trace()
         with metrics.aggregate("train_inner"), torch.autograd.profiler.record_function(
             "train_step-%d" % i
         ):
@@ -315,17 +312,26 @@ def train(
         valid_losses, should_stop = validate_and_save(
             cfg, trainer, task, epoch_itr, valid_subsets, end_of_epoch
         )
-
-        test_losses, _ = validate_without_save(
-            cfg, trainer, task, epoch_itr, ['test'], end_of_epoch
-        )
+        if isinstance(task, DocumentTranslationTask):
+            task._reset_ref_hypo()
+            if cfg['task']["eval_test_set"]:
+                test_losses, _ = validate_without_save(
+                    cfg, trainer, task, epoch_itr, ['test'], end_of_epoch
+                )
+            _test_multi_bleu_all_sents = task._score(task._ref_sents, task._hypo_sents)
+            _test_multi_bleu_last_sents = task._score(task._ref_last_sents, task._hypo_last_sents)
         if should_stop:
             break
 
-    # from pudb import set_trace; set_trace()
     # log end-of-epoch stats
     logger.info("end of epoch {} (average epoch stats below)".format(epoch_itr.epoch))
     stats = get_training_stats(metrics.get_smoothed_values("train"))
+    if isinstance(task, DocumentTranslationTask):
+        if cfg['task']['eval_multiple_bleu']:
+            stats['test_all_sents'] = float(_test_multi_bleu_all_sents.split(',')[0].split('=')[-1].strip())
+            if cfg['task']['eval_last_sentence']:
+                stats['test_last_sent'] = float(_test_multi_bleu_last_sents.split(',')[0].split('=')[-1].strip())
+    
     progress.print(stats, tag="train", step=num_updates)
 
     # reset epoch-level meters
@@ -344,6 +350,7 @@ def _flatten_config(cfg: DictConfig):
     if namespace is not None:
         config["args"] = vars(namespace)
     return config
+
 
 # Hien-v modified to test (infer) during training
 # Note that, this does not matter to training progress
@@ -405,19 +412,12 @@ def validate_without_save(
     # Validate
     valid_losses = [None]
     if do_validate:
-        # from pudb import set_trace; set_trace()
         valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets)
 
     should_stop |= should_stop_early(cfg, valid_losses[0])
 
-    # Save checkpoint
-    # if do_save or should_stop:
-    #     checkpoint_utils.save_checkpoint(
-    #         cfg.checkpoint, trainer, epoch_itr, valid_losses[0]
-    #     )
 
     return valid_losses, should_stop
-
 
 
 def validate_and_save(
@@ -434,7 +434,6 @@ def validate_and_save(
     # Stopping conditions (and an additional one based on validation loss later
     # on)
     should_stop = False
-    # from pudb import set_trace; set_trace()
     if num_updates >= max_update:
         should_stop = True
         logger.info(
@@ -478,7 +477,6 @@ def validate_and_save(
     # Validate
     valid_losses = [None]
     if do_validate:
-        # from pudb import set_trace; set_trace()
         valid_losses = validate(cfg, trainer, task, epoch_itr, valid_subsets)
 
     should_stop |= should_stop_early(cfg, valid_losses[0])
@@ -551,7 +549,6 @@ def validate(
                     break
                 trainer.valid_step(sample)
 
-        from pudb import set_trace; set_trace()
         # log validation stats
         stats = get_valid_stats(cfg, trainer, agg.get_smoothed_values())
 
@@ -567,7 +564,6 @@ def validate(
 def get_valid_stats(
     cfg: DictConfig, trainer: Trainer, stats: Dict[str, Any]
 ) -> Dict[str, Any]:
-    # from pudb import set_trace; set_trace()
     stats["num_updates"] = trainer.get_num_updates()
     if hasattr(checkpoint_utils.save_checkpoint, "best"):
         key = "best_{0}".format(cfg.checkpoint.best_checkpoint_metric)

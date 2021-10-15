@@ -18,6 +18,7 @@ from fairseq.dataclass.configs import (
     DistributedTrainingConfig,
     EvalLMConfig,
     GenerationConfig,
+    ConsitencyTestConfig,
     InteractiveConfig,
     OptimizationConfig,
     EMAConfig,
@@ -55,6 +56,20 @@ def get_generation_parser(interactive=False, default_task="translation"):
         add_interactive_args(parser)
     return parser
 
+def get_consistency_score_parser(interactive=False, default_task='translation'):
+    parser = get_parser("Generation", default_task)
+    add_dataset_args(parser, gen=True)
+    add_distributed_training_args(parser, default_world_size=1)
+    add_generation_args(parser)
+    add_consistencytest_args(parser)
+    add_checkpoint_args(parser)
+    parser.add_argument("--raw-data-source", default=None, type=str,
+                    help="raw source sentences")
+    parser.add_argument("--target-data-source", default=None, type=str,
+                    help="raw target sentences")                    
+    if interactive:
+        add_interactive_args(parser)
+    return parser
 
 def get_interactive_generation_parser(default_task="translation"):
     return get_generation_parser(interactive=True, default_task=default_task)
@@ -169,7 +184,7 @@ def parse_args_and_arch(
     # Modify the parser a second time, since defaults may have been reset
     if modify_parser is not None:
         modify_parser(parser)
-
+    
     # Parse a second time.
     if parse_known:
         args, extra = parser.parse_known_args(input_args)
@@ -343,6 +358,11 @@ def add_generation_args(parser):
     gen_parser_from_dataclass(group, GenerationConfig())
     return group
 
+def add_consistencytest_args(parser):
+    group = parser.add_argument_group("ConsitencyTest")
+    add_common_eval_args(group)
+    gen_parser_from_dataclass(group, ConsitencyTestConfig())
+    return group
 
 def add_interactive_args(parser):
     group = parser.add_argument_group("Interactive")

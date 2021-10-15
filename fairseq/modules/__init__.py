@@ -40,8 +40,11 @@ from .doc_transformer_layer import DocTransformerEncoderLayer, DocTransformerDec
 from .vggblock import VGGBlock
 # Import my codes. Note that the order of import does matter to system. It can 
 #   cause some errors if TransformerEncoderLayer (or TransformerDecoderLayer) is imported first
+
+"""
 from .my_multihead_attention import MyMultiheadAttention
 from .my_transformer_layer import MyTransformerEncoderLayer, MyTransformerDecoderLayer
+"""
 
 
 __all__ = [

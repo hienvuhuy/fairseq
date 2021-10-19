@@ -9,8 +9,8 @@ from fairseq.models.doc_zhang_20.doc_zhang20_transformer_config import (
     DEFAULT_MAX_TARGET_POSITIONS,
     DEFAULT_MIN_PARAMS_TO_WRAP
 )
-from fairseq.models.doctransformer.doc_transformer_base import (
-    DocTransformerModelBase
+from fairseq.models.doc_zhang_20.doc_zhang20_transformer_base import (
+    DocZhang20TransformerModelBase
 )
 from omegaconf import DictConfig, open_dict, OmegaConf
 
@@ -86,7 +86,7 @@ def base_architecture(args):
         _base_architecture(args)
 
 @register_model("doczhang20transformer", dataclass=DocZhang20TransformerConfig)
-class DocZhang20TransformerModel(DocTransformerModelBase):
+class DocZhang20TransformerModel(DocZhang20TransformerModelBase):
     """
     This is the legacy implementation of the transformer model that
     uses argparse for configuration.

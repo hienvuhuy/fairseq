@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Hien-v: Reuse from transformer_encoder.py
-
+# reconvert: done
 import math
 from typing import Dict, List, Optional
 
@@ -20,13 +20,10 @@ from fairseq.modules import (
     PositionalEmbedding,
     SinusoidalPositionalEmbedding,
 )
-from fairseq.modules import doc_transformer_layer #transformer_layer
+from fairseq.modules import doc_zhang20_transformer_layer #, doc_transformer_layer #transformer_layer
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
 from torch import Tensor
-# from fairseq.models.transformer import (
-#     TransformerConfig,
-# )
 from fairseq.models.doc_zhang_20 import (
     DocZhang20TransformerConfig
 )
@@ -67,12 +64,6 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
 
         self.embed_tokens = embed_tokens
 
-        # hmm, why scale? need paper to understand. Currently, we don't use it anymore
-        # Some explaination come from:
-        #   https://stackoverflow.com/questions/56930821/why-does-embedding-vector-multiplied-by-a-constant-in-transformer-model
-        #   https://towardsdatascience.com/how-to-code-the-transformer-in-pytorch-24db27c8f9ec
-        # We scale up the embed to make sure that the value of word embedding is not to small
-
         self.embed_scale = 1.0 if cfg.no_scale_embedding else math.sqrt(embed_dim)
 
         self.embed_positions = (
@@ -103,26 +94,8 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
             self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        
-        # We integrate new features at here
-        # TODO: which one is esier?
-        #   1. integrate in building layer?
-        #   2. use nn.ModuleList to extend self-attention?
-        # think about when we have to load pretrained weights
-        # from pudb import set_trace; set_trace()
-        local_dicts = []
-        global_dicts = []
-        
-        for _cfg_string in cfg.local_attention:
-            _cfg = json.loads(_cfg_string)
-            local_dicts.append(torch.load(_cfg['checkpoint_path']))
-        
-        for _cfg_string in cfg.global_attention:
-            _cfg = json.loads(_cfg_string)
-            global_dicts.append(torch.load(_cfg['checkpoint_path']))
-        
         self.layers.extend(
-            [self.build_encoder_layer(cfg, weight_dict_pair={'local_attention':local_dicts, 'global_attention':global_dicts}, layer_index=i ) for i in range(cfg.encoder.layers)]
+            [self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)]
         )
         self.num_layers = len(self.layers)
 
@@ -130,13 +103,9 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
             self.layer_norm = LayerNorm(embed_dim, export=cfg.export)
         else:
             self.layer_norm = None
-        
-        del local_dicts
-        del global_dicts
-        # del weight_dict_pair
 
-    def build_encoder_layer(self, cfg, weight_dict_pair, layer_index=-1):
-        layer = doc_transformer_layer.DocTransformerEncoderLayerBase(cfg, weight_dict_pair, layer_index=layer_index)
+    def build_encoder_layer(self, cfg):
+        layer = doc_zhang20_transformer_layer.DocZhang20TransformerEncoderLayerBase(cfg)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -147,7 +116,6 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
         layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
         return layer
 
-    # forward embedding: add postion embedding value to word embedding
     def forward_embedding(
         self, src_tokens, token_embedding: Optional[torch.Tensor] = None
     ):
@@ -242,7 +210,6 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
         if has_pads:
             x = x * (1 - encoder_padding_mask.unsqueeze(-1).type_as(x))
 
-        # Batchsize x Token length x C (dim size of model 512)
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 

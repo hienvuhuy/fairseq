@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 # Hien-v: Reuse from transformer_decoder.py
-
+# Reconvert: Done
 
 import math
 from typing import Any, Dict, List, Optional
@@ -24,7 +24,7 @@ from fairseq.modules import (
     PositionalEmbedding,
     SinusoidalPositionalEmbedding,
 )
-from fairseq.modules import doc_transformer_layer#transformer_layer
+from fairseq.modules import doc_zhang20_transformer_layer#doc_transformer_layer#transformer_layer
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
 from torch import Tensor
@@ -36,7 +36,6 @@ def module_name_fordropout(module_name: str) -> str:
         return 'DocTransformerDecoder'
     else:
         return module_name
-
 
 class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
     """
@@ -117,25 +116,10 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
             self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-
-
-        # Integrate feature attention
-        local_dicts = []
-        global_dicts = []
-        
-        for _cfg_string in cfg.local_attention:
-            _cfg = json.loads(_cfg_string)
-            local_dicts.append(torch.load(_cfg['checkpoint_path']))
-        
-        for _cfg_string in cfg.global_attention:
-            _cfg = json.loads(_cfg_string)
-            global_dicts.append(torch.load(_cfg['checkpoint_path']))
         self.layers.extend(
             [
-                self.build_decoder_layer(cfg, no_encoder_attn=no_encoder_attn,\
-                                            weight_dict_pair={'local_attention':local_dicts, 'global_attention':global_dicts},\
-                                            layer_index=i )\
-                                for i in range(cfg.decoder.layers)
+                self.build_decoder_layer(cfg, no_encoder_attn)
+                for _ in range(cfg.decoder.layers)
             ]
         )
         self.num_layers = len(self.layers)
@@ -188,10 +172,8 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
                 BaseLayer(cfg),
             )
 
-    def build_decoder_layer(self, cfg, no_encoder_attn=False, weight_dict_pair=None, layer_index=-1):
-        layer = doc_transformer_layer.DocTransformerDecoderLayerBase(cfg, no_encoder_attn = no_encoder_attn,\
-                                                                            weight_dict_pair = weight_dict_pair, \
-                                                                            layer_index=layer_index, )
+    def build_decoder_layer(self, cfg, no_encoder_attn=False):
+        layer = doc_zhang20_transformer_layer.DocZhang20TransformerDecoderLayerBase(cfg, no_encoder_attn)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations

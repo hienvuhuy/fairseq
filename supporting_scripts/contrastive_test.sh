@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run contrastive test from the begining with a dictionary
-
+start=`date +%s.%N`
 CUDA_VISIBLE_DEVICES="0" #"CUDA_VISIBLE_DEVICES=0,1"
 
 # Checkpoint to evaluate
@@ -8,14 +8,19 @@ checkpoint='/home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5_full_split_4
 
 # Task to evaluate, default is `translation` or `document-translation`
 task='document-translation'
-batch='1'
+batch='256'
 # Criterion can be changed if we implement other loss function
-criterion='label_smoothed_cross_entropy'
+# criterion='label_smoothed_cross_entropy'
+# the 'label_smoothed_cross_entropy_constrastive_test' is similar to 'label_smoothed_cross_entropy'
+# the difference is that 'label_smoothed_cross_entropy_constrastive_test' supports number_of_batch > 1
+criterion='label_smoothed_cross_entropy_constrastive_test'
+
 # echo "$task $criterion"
 # exit
 # output
 destination_path='/home/is/huyhien-v/Dev/Temp/test'
 
+result_file=$destination_path"/constrastive_test_results.txt"
 # Source and Target language
 src='en'
 tgt='ru'
@@ -109,15 +114,26 @@ fi
 for test in "${all_tests[@]}"; do
         echo "Validating $test ..."
         # echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES fairseq-generate $destination_path/$test --path $checkpoint --results-path $destination_path/$test"
-        echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python $count_loss_script $destination_path/$test --task $task --path $checkpoint --results-path $destination_path/$test --batch-size 1 --valid-subset test --criterion $criterion "
+        echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python $count_loss_script $destination_path/$test --task $task --path $checkpoint --results-path $destination_path/$test --batch-size $batch --valid-subset test --criterion $criterion "
         # Note that batch-size is always 1
         CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python $count_loss_script $destination_path/$test --task $task --path $checkpoint --results-path $destination_path/$test --batch-size $batch --valid-subset 'test' --criterion $criterion 
         #output file is alwas `$destination_path/$test/generate-loss-test.txt`        
         echo "    Scoring..."
+        echo "python $voita_et_al_19_repo/scripts/evaluate_consistency.py --repo-dir $voita_et_al_19_repo --test $test  --scores $destination_path/$test/generate-loss-test.txt > $destination_path/$test/$test.consistency.txt"
+        
         python $voita_et_al_19_repo/scripts/evaluate_consistency.py \
             --repo-dir $voita_et_al_19_repo \
             --test $test \
             --scores $destination_path/$test/generate-loss-test.txt > $destination_path/$test/$test".consistency.txt"
 done
 
+for test in "${all_tests[@]}"; do
+    cat $destination_path/$test/$test".consistency.txt" >> $result_file
+    echo "======break=====" >> $result_file
+done
+
+end=`date +%s.%N`
+
+runtime=$( echo "$end - $start" | bc -l )
+echo "Total $runtime"
 echo "Done"

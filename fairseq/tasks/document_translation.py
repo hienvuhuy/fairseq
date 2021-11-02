@@ -328,7 +328,7 @@ class DocumentTranslationTask(FairseqTask):
         self._ref_last_sents = []
         self._hypo_sents = []
         self._hypo_last_sents = []
-        from pudb import set_trace; set_trace()
+        # from pudb import set_trace; set_trace()
         self._use_customized_generator = False
 
 
@@ -509,8 +509,8 @@ class DocumentTranslationTask(FairseqTask):
             optimizer.backward(loss)
         return loss, sample_size, logging_output
 
-    def valid_step(self, sample, model, criterion):
-        loss, sample_size, logging_output = super().valid_step(sample, model, criterion)
+    def valid_step(self, sample, model, criterion, reduce=True):
+        loss, sample_size, logging_output = super().valid_step(sample, model, criterion, reduce=reduce)
         if self.cfg.eval_bleu:
             
             bleu = self._inference_with_bleu(self.sequence_generator, sample, model)

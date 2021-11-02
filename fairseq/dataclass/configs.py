@@ -920,8 +920,26 @@ class GenerationConfig(FairseqDataclass):
         default=False,
         metadata={"help": "if set, dont use seed for initializing random generators"},
     )
-
-
+@dataclass
+class ConsitencyTestConfig(FairseqDataclass):
+    src_raw_data_path: Optional[str] = field(
+        default=None, metadata={"help": "path to source raw data"},
+    )
+    tgt_raw_data_path: Optional[str] = field(
+        default=None, metadata={"help": "path to target raw data"},
+    )
+    src_dictionary: Optional[str] = field(
+        default=None, metadata={"help": "path to target raw data"},
+    )
+    tgt_dictionary: Optional[str] = field(
+        default=None, metadata={"help": "path to target raw data"},
+    )
+    destination_path: Optional[str] = field(
+        default=None, metadata={"help": "path to execute consistency test"},
+    )
+    output_path: Optional[str] = field(
+        default=None, metadata={"help": "path to the result file"},
+    )
 @dataclass
 class CommonEvalConfig(FairseqDataclass):
     path: Optional[str] = field(

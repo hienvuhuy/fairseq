@@ -4,6 +4,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+# CUDA_VISIBLE_DEVICES=0 python /home/is/huyhien-v/Dev/MT/fairseq-alter/supporting_scripts/count_loss_dataset.py 
+#       /home/is/huyhien-v/Dev/Temp/test/deixis_dev --task document-translation 
+#       --path /home/cl/huyhien-v/Workspace/MT/experiments/baseline1_5_full_split_400k/checkpoints/baseline1_5_full_para_split_400k/checkpoint_last.pt 
+#       --results-path /home/is/huyhien-v/Dev/Temp/test/deixis_dev --batch-size 1  
+#       --valid-subset test --criterion label_smoothed_cross_entropy 
+
 import logging
 import os
 import sys
@@ -77,8 +83,9 @@ def main(cfg: DictConfig, override_args=None):
 
     # Print args
     logger.info(saved_cfg)
-
+    
     # Build criterion
+    saved_cfg.criterion['_name'] = cfg.criterion.get('_name')
     criterion = task.build_criterion(saved_cfg.criterion)
     criterion.eval()
     losses = []
@@ -118,16 +125,31 @@ def main(cfg: DictConfig, override_args=None):
         log_outputs = []
         for i, sample in enumerate(progress):
             sample = utils.move_to_cuda(sample) if use_cuda else sample
-            # from pudb import set_trace; set_trace()
-            _loss, _sample_size, log_output = task.valid_step(sample, model, criterion) #if lack of time, add `reduce option is False to valid_step funciton of task`
+            if sample.get('nsentences') > 1:
+                _loss, _sample_size, log_output = task.valid_step(sample, model, criterion, reduce=False) #if lack of time, add `reduce option is False to valid_step funciton of task`
+            else:
+                _loss, _sample_size, log_output = task.valid_step(sample, model, criterion)
+            #Todo: get _loss.sum(dim=1); map voi sample.get('id'): Done
+            if sample.get('nsentences') > 1:
+                _loss = _loss.sum(dim=1)
+                
+                log_output['loss'] = torch.sum(log_output.get('loss').squeeze())
+                log_output['nll_loss'] = torch.sum(log_output.get('nll_loss').squeeze())
             progress.log(log_output, step=i)
             log_outputs.append(log_output)
-            
-            losses.append( (sample.get('id').item(), \
-                            "{:.6f}".format(_loss.item()), \
-                            task.src_dict.string(sample['net_input']['src_tokens']), \
-                            task.tgt_dict.string(sample['target']))
-                        )
+            if sample.get('nsentences') > 1:
+                for idx, (_loss_value, _loss_id) in enumerate(zip(_loss.squeeze(dim=1).tolist(), sample.get('id').tolist())):
+                    losses.append(( _loss_id,\
+                                    "{:.6f}".format(_loss_value),
+                                    task.src_dict.string(sample['net_input']['src_tokens'][idx]),
+                                    task.tgt_dict.string(sample['target'][idx])    
+                                ))
+            else:
+                losses.append( (sample.get('id').item(), \
+                                "{:.6f}".format(_loss.item()), \
+                                task.src_dict.string(sample['net_input']['src_tokens']), \
+                                task.tgt_dict.string(sample['target']))
+                            )
             
 
         if data_parallel_world_size > 1:

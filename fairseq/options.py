@@ -65,8 +65,12 @@ def get_consistency_score_parser(interactive=False, default_task='translation'):
     add_checkpoint_args(parser)
     parser.add_argument("--raw-data-source", default=None, type=str,
                     help="raw source sentences")
+    parser.add_argument("--only-scoring-translation", default=False, type=bool,
+                    help="raw source sentences")                    
     parser.add_argument("--target-data-source", default=None, type=str,
-                    help="raw target sentences")                    
+                    help="raw target sentences")
+    parser.add_argument("--data-name", default=None, type=str,
+                    help="name of test file")                    
     if interactive:
         add_interactive_args(parser)
     return parser
@@ -82,6 +86,15 @@ def get_eval_lm_parser(default_task="language_modeling"):
     add_eval_lm_args(parser)
     return parser
 
+def get_counting_loss_parser(default_task="translation"):
+    parser = get_parser("Validation", default_task)
+    add_dataset_args(parser, train=True)
+    add_distributed_training_args(parser, default_world_size=1)
+    add_consistencytest_args(parser)
+    group = parser.add_argument_group("Evaluation")
+    gen_parser_from_dataclass(group, CommonEvalConfig())
+
+    return parser
 
 def get_validation_parser(default_task=None):
     parser = get_parser("Validation", default_task)

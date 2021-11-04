@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
-from fairseq import utils
+from fairseq import utils, doc_utils
 from fairseq.distributed import fsdp_wrap
 from fairseq.models import FairseqIncrementalDecoder
 # from fairseq.models.transformer import TransformerConfig
@@ -188,6 +188,7 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]] = None,
+        # src_tokens = None, # add to get src_tokens
         incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
         features_only: bool = False,
         full_context_alignment: bool = False,
@@ -218,6 +219,7 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         x, extra = self.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
+            # src_tokens=src_tokens,# chuyen qua lay src_tokens tu encoder_out
             incremental_state=incremental_state,
             full_context_alignment=full_context_alignment,
             alignment_layer=alignment_layer,
@@ -232,6 +234,7 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]],
+        # src_tokens: None, # chuyen qua lay src_tokens tu encoder_out
         incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
         full_context_alignment: bool = False,
         alignment_layer: Optional[int] = None,
@@ -240,6 +243,7 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         return self.extract_features_scriptable(
             prev_output_tokens,
             encoder_out,
+            # src_tokens, # chuyen qua lay src_tokens tu encoder_out
             incremental_state,
             full_context_alignment,
             alignment_layer,
@@ -256,10 +260,12 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]],
+        # src_tokens=None, # chuyen sang lay src_token tu encoder_out
         incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
         full_context_alignment: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
+
     ):
         """
         Similar to *forward* but only return features.
@@ -280,6 +286,34 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
                 - the decoder's features of shape `(batch, tgt_len, embed_dim)`
                 - a dictionary with any model-specific outputs
         """
+        ## we must generate mask based on the prev_output_tokens
+        # Generate mask
+        # note that: prev_output_tokens's shape is (batch_size, sequence_length)
+        #   the shape of _local_attn_mask is: (batch_size, sequence_length, sequence_length)
+        #   MultiheadAttention of pytorch requires (batch_size x n_heads, sequence_length, sequence_length)
+        #   Currently, the _local_attn_mask contains `True` or `False` value
+        #   `True` means the position is blocked
+        # _local_attn_mask = doc_utils.generate_masking(prev_output_tokens, doc_utils.TARGET_SEPARATION_ID, 'Binary')
+        # # fit mask with attention heads
+        # _local_attn_mask = torch.repeat_interleave(_local_attn_mask, self.cfg.decoder.attention_heads, dim=0)
+        
+
+        # why shape change?
+        # if encoder_out.get('source_tokens') is None:
+        #     from pudb import set_trace; set_trace()
+        # _encoder_local_mask = doc_utils.generate_cross_masking(prev_output_tokens, \
+        #                                     doc_utils.TARGET_SEPARATION_ID, \
+        #                                     # encoder_out.get('src_tokens'), \
+        #                                     encoder_out.get('source_tokens'),
+        #                                     doc_utils.SOURCE_SEPARATION_ID, \
+        #                                     'Binary'
+        #                                     )
+        # _encoder_local_mask = torch.repeat_interleave(_encoder_local_mask, self.cfg.decoder.attention_heads, dim=0)
+
+        # At this time, we have full encoder ouput, the prev output tokens. We do have to do 2 things
+        # - block information from separeted sentences in source to wrong position in the target 
+        # - check the attention weight to make sure it is correct
+        
         bs, slen = prev_output_tokens.size()
         if alignment_layer is None:
             alignment_layer = self.num_layers - 1
@@ -306,6 +340,18 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
             if positions is not None:
                 positions = positions[:, -1:]
 
+        _local_attn_mask = doc_utils.generate_masking(prev_output_tokens, doc_utils.TARGET_SEPARATION_ID, 'Binary')
+        # fit mask with attention heads
+        _local_attn_mask = torch.repeat_interleave(_local_attn_mask, self.cfg.decoder.attention_heads, dim=0)
+        _encoder_local_mask = doc_utils.generate_cross_masking(prev_output_tokens, \
+                                            doc_utils.TARGET_SEPARATION_ID, \
+                                            # encoder_out.get('src_tokens'), \
+                                            encoder_out.get('source_tokens'),
+                                            doc_utils.SOURCE_SEPARATION_ID, \
+                                            'Binary'
+                                            )
+        _encoder_local_mask = torch.repeat_interleave(_encoder_local_mask, self.cfg.decoder.attention_heads, dim=0)
+
         # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(prev_output_tokens)
 
@@ -326,8 +372,10 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
+        # masking for padding characters
         self_attn_padding_mask: Optional[Tensor] = None
         if self.cross_self_attention or prev_output_tokens.eq(self.padding_idx).any():
+            # from pudb import set_trace; set_trace()
             self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
         # decoder layers
@@ -335,23 +383,34 @@ class DocZhang20TransformerDecoderBase(FairseqIncrementalDecoder):
         inner_states: List[Optional[Tensor]] = [x]
         for idx, layer in enumerate(self.layers):
             if incremental_state is None and not full_context_alignment:
+                # self_attn_mask contains "0.0" or "-inf"
                 self_attn_mask = self.buffered_future_mask(x)
             else:
                 self_attn_mask = None
-
+            # from pudb import set_trace; set_trace()
+            # currently, we are using padding_mask to pass it through
+            # but it should be mask. can we simply sum 2 masks?
             x, layer_attn, _ = layer(
-                x,
-                enc,
-                padding_mask,
-                incremental_state,
-                self_attn_mask=self_attn_mask,
+                x=x,
+                encoder_out=enc,
+                encoder_padding_mask=padding_mask,
+                encoder_local_mask=_encoder_local_mask,
+                incremental_state=incremental_state,
+                global_attn_mask=self_attn_mask, # keep it because global are unchanged, we only add mask to local
+                local_attn_mask= _local_attn_mask, #self_attn_mask, # need to generate local mask. We temporarily set it to pass checking code
                 self_attn_padding_mask=self_attn_padding_mask,
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
             )
             inner_states.append(x)
+            # from pudb import set_trace; set_trace()
             if layer_attn is not None and idx == alignment_layer:
-                attn = layer_attn.float().to(x)
+                # from pudb import set_trace; set_trace()
+                if isinstance(layer_attn,dict):
+                    if layer_attn.get('decoder_cross_local', None) is not None:
+                        attn = layer_attn.get('decoder_cross_local', None).float().to(x)
+                    elif layer_attn.get('decoder_self_local', None) is not None:
+                        attn = layer_attn.get('decoder_self_local', None).float().to(x)
 
         if attn is not None:
             if alignment_heads is not None:

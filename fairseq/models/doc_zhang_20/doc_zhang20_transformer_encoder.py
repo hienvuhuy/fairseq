@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
-from fairseq import utils
+from fairseq import utils, doc_utils
 from fairseq.distributed import fsdp_wrap
 from fairseq.models import FairseqEncoder
 from fairseq.modules import (
@@ -203,8 +203,14 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
         # compute padding mask
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
         has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()
-
+        ## Dat mask sentence o day
+        # from pudb import set_trace; set_trace()
         x, encoder_embedding = self.forward_embedding(src_tokens, token_embeddings)
+        
+        # Generate mask
+        _local_attn_mask = doc_utils.generate_masking(src_tokens, doc_utils.SOURCE_SEPARATION_ID, 'Value')
+        # fit mask with attention heads
+        _local_attn_mask = torch.repeat_interleave(_local_attn_mask, self.cfg.encoder.attention_heads, dim=0)
 
         # account for padding while computing the representation
         if has_pads:
@@ -212,7 +218,7 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
-
+        # _local_attn_mask = _local_attn_mask.transpose(0, 1)
         encoder_states = []
 
         if return_all_hiddens:
@@ -221,7 +227,9 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
         # encoder layers
         for layer in self.layers:
             x = layer(
-                x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                x=x, 
+                encoder_padding_mask=encoder_padding_mask if has_pads else None,
+                local_attn_mask = _local_attn_mask
             )
             if return_all_hiddens:
                 assert encoder_states is not None
@@ -241,7 +249,10 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
             "encoder_embedding": [encoder_embedding],  # B x T x C
             "encoder_states": encoder_states,  # List[T x B x C]
             "src_tokens": [],
+            # "src_tokens": src_tokens,
             "src_lengths": [src_lengths],
+            "source_tokens":src_tokens
+
         }
 
     @torch.jit.export
@@ -256,6 +267,14 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
         Returns:
             *encoder_out* rearranged according to *new_order*
         """
+
+
+        encoder_source_tokens: Optional[Tensor] = encoder_out['source_tokens']
+        new_encoder_source_tokens = (
+            encoder_source_tokens
+            if encoder_source_tokens is None
+            else encoder_source_tokens.index_select(0, new_order)
+        )
         if len(encoder_out["encoder_out"]) == 0:
             new_encoder_out = []
         else:
@@ -295,6 +314,7 @@ class DocZhang20TransformerEncoderBase(FairseqEncoder):
             "encoder_states": encoder_states,  # List[T x B x C]
             "src_tokens": src_tokens,  # B x T
             "src_lengths": src_lengths,  # B x 1
+            "source_tokens": new_encoder_source_tokens #
         }
 
     def max_positions(self):

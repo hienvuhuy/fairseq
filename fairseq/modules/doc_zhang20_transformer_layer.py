@@ -38,7 +38,16 @@ class DocZhang20TransformerEncoderLayerBase(nn.Module):
         self.embed_dim = cfg.encoder.embed_dim
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
-        self.self_attn = self.build_self_attention(self.embed_dim, cfg)
+
+        #hien-v
+        # self.self_attn = self.build_self_attention(self.embed_dim, cfg)
+        self.local_attn = self.build_self_attention(self.embed_dim, cfg)
+        self.global_attn = self.build_self_attention(self.embed_dim, cfg)
+        self.attn_linear_proj_layer = self.build_attention_linear_layer(self.embed_dim, 
+                            self.embed_dim, 
+                            self.quant_noise,
+                            self.quant_noise_block_size)
+
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
@@ -76,6 +85,10 @@ class DocZhang20TransformerEncoderLayerBase(nn.Module):
         return quant_noise(
             nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
         )
+    def build_attention_linear_layer(self, input_dim, output_dim, q_noise, qn_block_size):
+        return quant_noise(
+            nn.Linear(input_dim*2, output_dim), p=q_noise, block_size=qn_block_size
+        )
 
     def build_self_attention(self, embed_dim, cfg):
         return MultiheadAttention(
@@ -108,14 +121,14 @@ class DocZhang20TransformerEncoderLayerBase(nn.Module):
         self,
         x,
         encoder_padding_mask: Optional[Tensor],
-        attn_mask: Optional[Tensor] = None,
+        local_attn_mask: Optional[Tensor] = None,
     ):
         """
         Args:
             x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
             encoder_padding_mask (ByteTensor): binary ByteTensor of shape
                 `(batch, seq_len)` where padding elements are indicated by ``1``.
-            attn_mask (ByteTensor): binary tensor of shape `(tgt_len, src_len)`,
+            local_attn_mask (ByteTensor): binary tensor of shape `(tgt_len, src_len)`,
                 where `tgt_len` is the length of output and `src_len` is the
                 length of input, though here both are equal to `seq_len`.
                 `attn_mask[tgt_i, src_j] = 1` means that when calculating the
@@ -130,20 +143,39 @@ class DocZhang20TransformerEncoderLayerBase(nn.Module):
         # Note that we cannot use -inf here, because at some edge cases,
         # the attention weight (before softmax) for some padded element in query
         # will become -inf, which results in NaN in model parameters
-        if attn_mask is not None:
-            attn_mask = attn_mask.masked_fill(attn_mask.to(torch.bool), -1e8)
+        # attn_dict={}
+        if local_attn_mask is not None:
+            local_attn_mask = local_attn_mask.masked_fill(local_attn_mask.to(torch.bool), -1e8)
 
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
-        x, _ = self.self_attn(
+        # x, _ = self.self_attn(
+        #     query=x,
+        #     key=x,
+        #     value=x,
+        #     key_padding_mask=encoder_padding_mask,
+        #     need_weights=False,
+        #     attn_mask=attn_mask,
+        # )
+        x_local, _ = self.local_attn(
             query=x,
             key=x,
             value=x,
             key_padding_mask=encoder_padding_mask,
             need_weights=False,
-            attn_mask=attn_mask,
+            attn_mask=local_attn_mask,
         )
+        x_global, _ = self.global_attn(
+            query=x,
+            key=x,
+            value=x,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+        )
+        x = torch.cat((x_local, x_global), dim=-1)
+        x = self.attn_linear_proj_layer(x)
+
         x = self.dropout_module(x)
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -204,12 +236,32 @@ class DocZhang20TransformerDecoderLayerBase(nn.Module):
 
         self.cross_self_attention = cfg.cross_self_attention
 
-        self.self_attn = self.build_self_attention(
+        # Hien-v:
+        # Change self-attn -> local-attn + global-attn
+        # self.self_attn = self.build_self_attention(
+        #     self.embed_dim,
+        #     cfg,
+        #     add_bias_kv=add_bias_kv,
+        #     add_zero_attn=add_zero_attn,
+        # )
+
+        self.global_attn = self.build_self_attention(
             self.embed_dim,
             cfg,
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
         )
+        self.local_attn = self.build_self_attention(
+            self.embed_dim,
+            cfg,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn,
+        )
+        self.attn_linear_proj_layer = self.build_attention_linear_layer(self.embed_dim, 
+                            self.embed_dim,
+                            self.quant_noise,
+                            self.quant_noise_block_size)
+        # need to check dim
 
         self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
         activation_dropout_p = cfg.activation_dropout
@@ -224,11 +276,24 @@ class DocZhang20TransformerDecoderLayerBase(nn.Module):
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
 
         if no_encoder_attn:
-            self.encoder_attn = None
-            self.encoder_attn_layer_norm = None
+            # self.encoder_attn = None
+            # self.encoder_attn_layer_norm = None
+            self.local_encoder_attn = None
+            self.global_encoder_attn = None
         else:
+            # hien-v: change encoder_attn -> local and global attn
             self.encoder_attn = self.build_encoder_attention(self.embed_dim, cfg)
             self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
+
+
+            # self.local_encoder_attn = self.build_encoder_attention(self.embed_dim, cfg)
+            # self.global_encoder_attn = self.build_encoder_attention(self.embed_dim, cfg)
+            # self.encoder_attn_linear_proj_layer = self.build_encoder_attention_linear_layer(
+            #                 self.embed_dim, 
+            #                 self.embed_dim, 
+            #                 self.quant_noise,
+            #                 self.quant_noise_block_size)
+            # self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
 
         self.fc1 = self.build_fc1(
             self.embed_dim,
@@ -254,6 +319,14 @@ class DocZhang20TransformerDecoderLayerBase(nn.Module):
     def build_fc2(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(nn.Linear(input_dim, output_dim), q_noise, qn_block_size)
 
+    def build_attention_linear_layer(self, input_dim, output_dim, q_noise, qn_block_size):
+        return quant_noise(
+            nn.Linear(input_dim*2, output_dim), p=q_noise, block_size=qn_block_size
+        )
+    def build_encoder_attention_linear_layer(self, input_dim, output_dim, q_noise, qn_block_size):
+        return quant_noise(
+            nn.Linear(input_dim*2, output_dim), p=q_noise, block_size=qn_block_size
+        )
     def build_self_attention(
         self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False
     ):
@@ -289,15 +362,18 @@ class DocZhang20TransformerDecoderLayerBase(nn.Module):
     def forward(
         self,
         x,
-        encoder_out: Optional[torch.Tensor] = None,
-        encoder_padding_mask: Optional[torch.Tensor] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-        prev_self_attn_state: Optional[List[torch.Tensor]] = None,
-        prev_attn_state: Optional[List[torch.Tensor]] = None,
-        self_attn_mask: Optional[torch.Tensor] = None,
-        self_attn_padding_mask: Optional[torch.Tensor] = None,
-        need_attn: bool = False,
-        need_head_weights: bool = False,
+        encoder_out: Optional[torch.Tensor] = None, # same
+        encoder_padding_mask: Optional[torch.Tensor] = None, #same, in Gtrans-> padding_mask
+        encoder_local_mask: Optional[torch.Tensor] = None, # new, this is encoder-decoder mask for local
+        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None, # same
+        prev_self_attn_state: Optional[List[torch.Tensor]] = None, # same, but unused
+        prev_attn_state: Optional[List[torch.Tensor]] = None, # same, but unused
+        # self_attn_mask: Optional[torch.Tensor] = None, separate to local and global; local is self_attn_mask
+        local_attn_mask: Optional[torch.Tensor] = None, # new, it is self_attn_mask for local. where is a mask for encoder-decoder attn?
+        global_attn_mask: Optional[torch.Tensor] = None, # new, it is self_attn_mask for global
+        self_attn_padding_mask: Optional[torch.Tensor] = None, # same
+        need_attn: bool = False, # same
+        need_head_weights: bool = False, # same
     ):
         """
         Args:
@@ -312,76 +388,136 @@ class DocZhang20TransformerDecoderLayerBase(nn.Module):
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
+        # Can generate local_attn_mask, global_attn_mask and encoder_local_mask
+        #
         if need_head_weights:
             need_attn = True
-
+        # from pudb import set_trace; set_trace()
+        attn_dict = {}
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
-        if prev_self_attn_state is not None:
-            prev_key, prev_value = prev_self_attn_state[:2]
-            saved_state: Dict[str, Optional[Tensor]] = {
-                "prev_key": prev_key,
-                "prev_value": prev_value,
-            }
-            if len(prev_self_attn_state) >= 3:
-                saved_state["prev_key_padding_mask"] = prev_self_attn_state[2]
-            assert incremental_state is not None
-            self.self_attn._set_input_buffer(incremental_state, saved_state)
-        _self_attn_input_buffer = self.self_attn._get_input_buffer(incremental_state)
-        if self.cross_self_attention and not (
-            incremental_state is not None
-            and _self_attn_input_buffer is not None
-            and "prev_key" in _self_attn_input_buffer
-        ):
-            if self_attn_mask is not None:
-                assert encoder_out is not None
-                self_attn_mask = torch.cat(
-                    (x.new_zeros(x.size(0), encoder_out.size(0)), self_attn_mask), dim=1
-                )
-            if self_attn_padding_mask is not None:
-                if encoder_padding_mask is None:
-                    assert encoder_out is not None
-                    encoder_padding_mask = self_attn_padding_mask.new_zeros(
-                        encoder_out.size(1), encoder_out.size(0)
-                    )
-                self_attn_padding_mask = torch.cat(
-                    (encoder_padding_mask, self_attn_padding_mask), dim=1
-                )
-            assert encoder_out is not None
-            y = torch.cat((encoder_out, x), dim=0)
-        else:
-            y = x
+        # if prev_self_attn_state is not None:
+        #     # this block is unused
+        #     prev_key, prev_value = prev_self_attn_state[:2]
+        #     saved_state: Dict[str, Optional[Tensor]] = {
+        #         "prev_key": prev_key,
+        #         "prev_value": prev_value,
+        #     }
+        #     if len(prev_self_attn_state) >= 3:
+        #         saved_state["prev_key_padding_mask"] = prev_self_attn_state[2]
+        #     assert incremental_state is not None
+        #     self.self_attn._set_input_buffer(incremental_state, saved_state)
+        # # _self_attn_input_buffer = self.self_attn._get_input_buffer(incremental_state)
+        # _self_attn_input_buffer = self.global_attn._get_input_buffer(incremental_state)
+        # # _self
+        # if self.cross_self_attention and not (
+        #     incremental_state is not None
+        #     and _self_attn_input_buffer is not None
+        #     and "prev_key" in _self_attn_input_buffer
+        # ):
+        #     if self_attn_mask is not None:
+        #         assert encoder_out is not None
+        #         self_attn_mask = torch.cat(
+        #             (x.new_zeros(x.size(0), encoder_out.size(0)), self_attn_mask), dim=1
+        #         )
+        #     if self_attn_padding_mask is not None:
+        #         if encoder_padding_mask is None:
+        #             assert encoder_out is not None
+        #             encoder_padding_mask = self_attn_padding_mask.new_zeros(
+        #                 encoder_out.size(1), encoder_out.size(0)
+        #             )
+        #         self_attn_padding_mask = torch.cat(
+        #             (encoder_padding_mask, self_attn_padding_mask), dim=1
+        #         )
+        #     assert encoder_out is not None
+        #     y = torch.cat((encoder_out, x), dim=0)
+        # else:
+        #     y = x
+        y = x
 
-        x, attn = self.self_attn(
-            query=x,
-            key=y,
-            value=y,
+        
+
+        x_local, attn_local = self.local_attn( # done
+            query=x, key=y, value=y,
             key_padding_mask=self_attn_padding_mask,
             incremental_state=incremental_state,
             need_weights=False,
-            attn_mask=self_attn_mask,
+            # attn_mask=self_attn_mask,
+            attn_mask=local_attn_mask
         )
+        # from pudb import set_trace; set_trace()
+        if attn_local is not None:
+            attn_dict['decoder_self_local'] = attn_local
+
+        x_global, attn_global = self.global_attn(# done
+            query=x, key=y, value=y,
+            key_padding_mask=self_attn_padding_mask,
+            incremental_state=incremental_state,
+            need_weights=False,
+            attn_mask=global_attn_mask,
+        )
+
+        if attn_global is not None:
+            attn_dict['decoder_self_global'] = attn_global
+        
+        # merge global and local attns
+        x_combine = torch.cat((x_local, x_global), dim=-1)
+        x = self.attn_linear_proj_layer(x_combine)
+
+        # x, attn = self.self_attn(
+        #     query=x,
+        #     key=y,
+        #     value=y,
+        #     key_padding_mask=self_attn_padding_mask,
+        #     incremental_state=incremental_state,
+        #     need_weights=False,
+        #     attn_mask=self_attn_mask,
+        # )
         x = self.dropout_module(x)
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
             x = self.self_attn_layer_norm(x)
 
         if self.encoder_attn is not None and encoder_out is not None:
+        # if self.local_encoder_attn is not None and self.global_encoder_attn is not None and encoder_out is not None:
             residual = x
             if self.normalize_before:
                 x = self.encoder_attn_layer_norm(x)
-            if prev_attn_state is not None:
-                prev_key, prev_value = prev_attn_state[:2]
-                saved_state: Dict[str, Optional[Tensor]] = {
-                    "prev_key": prev_key,
-                    "prev_value": prev_value,
-                }
-                if len(prev_attn_state) >= 3:
-                    saved_state["prev_key_padding_mask"] = prev_attn_state[2]
-                assert incremental_state is not None
-                self.encoder_attn._set_input_buffer(incremental_state, saved_state)
+            # if prev_attn_state is not None:
+            #     prev_key, prev_value = prev_attn_state[:2]
+            #     saved_state: Dict[str, Optional[Tensor]] = {
+            #         "prev_key": prev_key,
+            #         "prev_value": prev_value,
+            #     }
+            #     if len(prev_attn_state) >= 3:
+            #         saved_state["prev_key_padding_mask"] = prev_attn_state[2]
+            #     assert incremental_state is not None
+            #     self.encoder_attn._set_input_buffer(incremental_state, saved_state)
 
+            # tam thoi comment
+            # x_e_local, attn_e_local = self.local_encoder_attn(
+            #     query=x, key=encoder_out, value=encoder_out,
+            #     key_padding_mask=encoder_padding_mask,
+            #     incremental_state=incremental_state,
+            #     static_kv=True,
+            #     attn_mask=encoder_local_mask, # need specify this value. is it correct?
+            #     need_weights=need_attn or (not self.training and self.need_attn),
+            #     need_head_weights=need_head_weights,
+            # )
+            # if attn_e_local is not None:
+            #     attn_dict['decoder_cross_local'] = attn_e_local
+            
+            # x_e_global, attn_e_global = self.global_encoder_attn( #done, it is unchanged
+            #     query=x, key=encoder_out, value=encoder_out,
+            #     key_padding_mask=encoder_padding_mask,
+            #     incremental_state=incremental_state,
+            #     static_kv=True,
+            #     need_weights=need_attn or (not self.training and self.need_attn),
+            #     need_head_weights=need_head_weights,
+            # )
+            # x_combine = torch.cat((x_e_local, x_e_global), dim=-1)
+            # x = self.encoder_attn_linear_proj_layer(x_combine)
             x, attn = self.encoder_attn(
                 query=x,
                 key=encoder_out,
@@ -409,18 +545,21 @@ class DocZhang20TransformerDecoderLayerBase(nn.Module):
         if not self.normalize_before:
             x = self.final_layer_norm(x)
         if self.onnx_trace and incremental_state is not None:
-            saved_state = self.self_attn._get_input_buffer(incremental_state)
-            assert saved_state is not None
+            # I have not seen the main flow goes to this block
+            saved_state_local = self.local_attn._get_input_buffer(incremental_state)
+            assert saved_state_local is not None
             if self_attn_padding_mask is not None:
                 self_attn_state = [
-                    saved_state["prev_key"],
-                    saved_state["prev_value"],
-                    saved_state["prev_key_padding_mask"],
+                    saved_state_local["prev_key"],
+                    saved_state_local["prev_value"],
+                    saved_state_local["prev_key_padding_mask"],
                 ]
             else:
-                self_attn_state = [saved_state["prev_key"], saved_state["prev_value"]]
-            return x, attn, self_attn_state
-        return x, attn, None
+                self_attn_state = [saved_state_local["prev_key"], saved_state_local["prev_value"]]
+            # return x, attn, self_attn_state
+            return x, attn_dict, self_attn_state
+        return x, attn_dict, None #attn_dict is used only for criterion with alignment
+        # return x, attn, None
 
     def make_generation_fast_(self, need_attn: bool = False, **kwargs):
         self.need_attn = need_attn

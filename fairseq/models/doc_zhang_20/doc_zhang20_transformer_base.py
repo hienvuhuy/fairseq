@@ -146,6 +146,7 @@ class DocZhang20TransformerModelBase(FairseqEncoderDecoderModel):
         decoder_out = self.decoder(
             prev_output_tokens,
             encoder_out=encoder_out,
+            # src_tokens=src_tokens, # dang them vao src_tokens, chung ta chuyen sang lay src_tokens tu encoder_out
             features_only=features_only,
             alignment_layer=alignment_layer,
             alignment_heads=alignment_heads,

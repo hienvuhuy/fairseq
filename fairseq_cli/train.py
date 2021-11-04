@@ -296,7 +296,7 @@ def train(
             "train_step-%d" % i
         ):
             log_output = trainer.train_step(samples)
-
+        
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats
             num_updates = trainer.get_num_updates()
@@ -307,8 +307,14 @@ def train(
                 # reset mid-epoch stats after each log interval
                 # the end-of-epoch stats will still be preserved
                 metrics.reset_meters("train_inner")
-
+        
         end_of_epoch = not itr.has_next()
+        # if isinstance(task, DocumentTranslationTask):
+        #     if cfg['task']['debug_mode'] is not None:
+        #         if cfg['task']['debug_mode']:
+        #             if i > 20:
+        #                 end_of_epoch = True
+        #                 # break
         valid_losses, should_stop = validate_and_save(
             cfg, trainer, task, epoch_itr, valid_subsets, end_of_epoch
         )
@@ -322,16 +328,23 @@ def train(
             _test_multi_bleu_last_sents = task._score(task._ref_last_sents, task._hypo_last_sents)
         if should_stop:
             break
-
+        # if isinstance(task, DocumentTranslationTask):
+        #     if cfg['task']['debug_mode'] is not None:
+        #         if cfg['task']['debug_mode']:
+        #             if i > 20:
+        #                 end_of_epoch = True
+        #                 break
     # log end-of-epoch stats
     logger.info("end of epoch {} (average epoch stats below)".format(epoch_itr.epoch))
     stats = get_training_stats(metrics.get_smoothed_values("train"))
-    if isinstance(task, DocumentTranslationTask):
-        if cfg['task']['eval_multiple_bleu']:
-            stats['test_all_sents'] = float(_test_multi_bleu_all_sents.split(',')[0].split('=')[-1].strip())
-            if cfg['task']['eval_last_sentence']:
-                stats['test_last_sent'] = float(_test_multi_bleu_last_sents.split(',')[0].split('=')[-1].strip())
-    
+    try:
+        if isinstance(task, DocumentTranslationTask):
+            if cfg['task']['eval_multiple_bleu']:
+                stats['test_all_sents'] = float(_test_multi_bleu_all_sents.split(',')[0].split('=')[-1].strip())
+                if cfg['task']['eval_last_sentence']:
+                    stats['test_last_sent'] = float(_test_multi_bleu_last_sents.split(',')[0].split('=')[-1].strip())
+    except Exception as e:
+        print ("some error", e)    
     progress.print(stats, tag="train", step=num_updates)
 
     # reset epoch-level meters

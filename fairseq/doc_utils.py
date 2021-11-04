@@ -115,8 +115,9 @@ def generate_cross_masking( query, query_sep_id,
             - get shape; length
             - Create a matrix with size of length of inputs
 
-
     """
+    if key is None or query is None:
+        return None
     key_shape = key.shape
     key_batch_size = key_shape[0]
     query_shape = query.shape

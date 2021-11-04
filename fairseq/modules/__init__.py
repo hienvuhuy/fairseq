@@ -84,6 +84,8 @@ __all__ = [
     "TransformerSentenceEncoder",
     "TransformerDecoderLayer",
     "TransformerEncoderLayer",
+    "TransformerCleanDecoderLayer",
+    "TransformerCleanEncoderLayer",
     "DocTransformerEncoderLayer",
     "DocTransformerDecoderLayer",
     "TransposeLast",

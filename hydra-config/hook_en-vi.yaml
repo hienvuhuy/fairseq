@@ -1,0 +1,97 @@
+# @package _group_
+# CUDA_VISIBLE_DEVICES=1 fairseq-train /home/cl/huyhien-v/Workspace/MT/experiments/baseline6m_split_200k/data-bin/baseline6m_split_200k29 
+
+
+#--wandb-project baseline6m_split_200k --seed 1102 
+#--fixed-validation-seed 1102 --keep-last-epochs 30  --batch-size 128
+
+hydra:
+    run:
+        dir: .
+common:
+    fp16: false
+    bf16: false
+    # wandb_project: zhang20
+
+dataset:
+    num_workers: 8
+    max_tokens: 4096
+    fixed_validation_seed: 1102
+
+optimization:
+    # max_update: 100000
+    clip_norm: 0.0
+    lr: 
+        - 7e-4
+    # update_freq: [8]
+    # De y learning rate; 
+    # theo nhu y cua sensei thi it data; lr nen nho lai
+    # stop_min_lr: 1e-09 
+
+
+checkpoint:
+    # no_epoch_checkpoints: true
+    save_dir: /cl/work2/huyhien-v/Experiments/MT/debug/en-vi
+    best_checkpoint_metric: bleu
+    maximize_best_checkpoint_metric: true
+    keep_last_epochs: 30
+
+
+model:
+    # _name: transformer_iwslt_de_en
+    _name: transformer_origin
+    activation_fn: "relu"
+    share_decoder_input_output_embed: true
+    dropout: 0.3
+    # attention_dropout: 0.2
+    # activation_dropout: 0.2
+    
+task:
+    _name: doc-translation
+    data: /home/is/huyhien-v/Data/Bin/MT/en-vi/iwslt15/data-bin/debug_envi00:/home/is/huyhien-v/Data/Bin/MT/en-vi/iwslt15/data-bin/debug_envi01
+    eval_bleu: true
+    eval_bleu_remove_bpe: '@@ '
+    eval_bleu_args: '{"beam": 4, "lenpen": 0.6}'
+    eval_bleu_detok: 'space'
+    # eval_multiple_bleu: true
+    # eval_test_set: true
+    # debug_mode: true
+criterion:
+    _name: label_smoothed_cross_entropy
+    label_smoothing: 0.1
+
+optimizer:
+    _name: adam
+    adam_betas: "(0.9,0.98)"
+    weight_decay: 0.0001
+
+lr_scheduler:
+    _name: inverse_sqrt
+    warmup_updates: 4000
+
+
+
+# hydra:
+
+# dataset:
+
+# optimization:
+#     update_freq: [8]
+#     # De y learning rate; 
+#     # theo nhu y cua sensei thi it data; lr nen nho lai
+#     stop_min_lr: 1e-09 
+
+
+# checkpoint:
+#     write_checkpoints_asynchronously: true
+
+
+# model:
+#     _name: transformer_origin
+    
+# criterion:
+
+# optimizer:
+
+# lr_scheduler:
+#     warmup_init_lr: 1e-7

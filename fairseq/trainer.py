@@ -165,7 +165,6 @@ class Trainer(object):
         else:
             self.cuda_env = None
             self.cuda_env_arr = None
-
         metrics.log_start_time("wall", priority=790, round=0)
 
         self._start_time = time.time()
@@ -1061,7 +1060,6 @@ class Trainer(object):
                     metrics.log_scalar(
                         "gb_free", gb_free, priority=1500, round=1, weight=0
                     )
-
                 # log stats
                 logging_output = self._reduce_and_log_stats(
                     logging_outputs, sample_size, grad_norm
